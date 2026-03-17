@@ -5,7 +5,71 @@ description: "Use when operating a browser: opening web pages, clicking UI eleme
 
 # 浏览器双引擎协同
 
-两个浏览器引擎**同时连接同一个 Chrome**，协同工作。
+## ⚠️ 铁律（必须遵守）
+
+1. **永远不要启动新的 Chrome 浏览器**。所有操作必须在用户日常使用的 Chrome 上进行。
+2. **两个引擎必须连同一个 Chrome**。如果不在同一个浏览器，"保姆"机制失效、扩展不存在、登录态丢失。
+3. **禁用** `mcp__browsermcp__*` 和 `mcp__puppeteer__*`，它们会启动独立 Chrome 实例。
+
+### 为什么？
+
+chrome-devtools-mcp 默认行为是启动一个独立的 Chrome 实例（`--user-data-dir=~/.cache/chrome-devtools-mcp/chrome-profile`）。这个独立 Chrome：
+- ❌ 没有 Claude in Chrome 扩展
+- ❌ 没有用户的登录态（Shopify、蓝湖等）
+- ❌ 没有用户的书签和设置
+- ❌ 和 Claude in Chrome 不在同一个浏览器，无法协同
+
+### 正确的连接方式
+
+chrome-devtools-mcp 必须通过 `--connect-url` 连接用户日常 Chrome 的调试端口：
+
+**MCP 配置（.mcp.json）：**
+```json
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": [
+        "chrome-devtools-mcp@latest",
+        "--connect-url=http://localhost:9222"
+      ]
+    }
+  }
+}
+```
+
+**用户的 Chrome 需要开启调试端口（一次性配置）：**
+
+macOS - 修改 Chrome 启动方式：
+```bash
+# 创建启动脚本
+cat > ~/chrome-debug.sh << 'EOF'
+#!/bin/bash
+open -a "Google Chrome" --args --remote-debugging-port=9222
+EOF
+chmod +x ~/chrome-debug.sh
+```
+
+或者直接改 Chrome 的启动参数（推荐，永久生效）：
+```bash
+# macOS: 修改 Chrome 的 Info.plist 或用 alias
+alias chrome='open -a "Google Chrome" --args --remote-debugging-port=9222'
+```
+
+### 新项目配置检查清单
+
+当这个 skill 被复制到新项目时，AI 应该检查：
+
+1. **项目有 .mcp.json 吗？** → 检查 chrome-devtools 是否配置了 `--connect-url`
+2. **没有 .mcp.json？** → 提示用户创建，并写入正确的配置
+3. **Chrome 调试端口开了吗？** → 尝试 `curl http://localhost:9222/json/version`，不通则提示用户
+
+```bash
+# 快速检测
+curl -s http://localhost:9222/json/version && echo "✅ Chrome 调试端口已开启" || echo "❌ 请用 --remote-debugging-port=9222 启动 Chrome"
+```
+
+---
 
 ## 角色分工
 
@@ -15,25 +79,24 @@ description: "Use when operating a browser: opening web pages, clicking UI eleme
 | **大脑 + 数据** | chrome-devtools-mcp (`mcp__chrome-devtools__*`) | DOM 树、网络请求、控制台、执行 JS、性能 |
 | **保姆** | chrome-devtools-mcp | Claude in Chrome 断开时自动重启扩展 |
 
-**禁用** `mcp__browsermcp__*` 和 `mcp__puppeteer__*`。
+两个引擎连接**同一个 Chrome 浏览器**（用户日常使用的那个），操作**同一个页面**。
 
 ## 启动流程
 
-### Step 1: 检测两个引擎
-
-同时检测，不是二选一：
+### Step 1: 检测环境
 
 ```
-1. mcp__claude-in-chrome__tabs_context_mcp  → 视觉引擎状态
-2. mcp__chrome-devtools__list_pages         → 数据引擎状态
+1. curl http://localhost:9222/json/version → Chrome 调试端口是否可用
+2. mcp__claude-in-chrome__tabs_context_mcp → 视觉引擎状态
+3. mcp__chrome-devtools__list_pages → 数据引擎状态
 ```
 
-| 视觉引擎 | 数据引擎 | 策略 |
-|----------|----------|------|
-| 可用 | 可用 | 双引擎协同（最佳） |
-| 不可用 | 可用 | 先自动修复视觉引擎，修复后双引擎协同 |
-| 可用 | 不可用 | 仅视觉引擎，提示用户开启 chrome://inspect/#remote-debugging |
-| 不可用 | 不可用 | 停止，提示用户检查 Chrome |
+| Chrome 调试端口 | 视觉引擎 | 数据引擎 | 策略 |
+|----------------|----------|----------|------|
+| 不可用 | - | - | 停止，提示用户用 `--remote-debugging-port=9222` 重启 Chrome |
+| 可用 | 可用 | 可用 | 双引擎协同（最佳） |
+| 可用 | 不可用 | 可用 | 先自动修复视觉引擎，修复后双引擎协同 |
+| 可用 | 可用 | 不可用 | 仅视觉引擎，检查 .mcp.json 中 chrome-devtools 配置 |
 
 ### Step 2: 自动修复 Claude in Chrome
 
