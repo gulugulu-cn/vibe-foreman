@@ -3,15 +3,13 @@
 #
 # 使用方法：
 #   1. 复制此文件: cp projects.yaml.example projects.yaml
-#   2. 编辑 projects.yaml 添加你的项目
-#   3. 或运行: bash scripts/scan-projects.sh ~/your/code/dir
-#
-# 字段说明：
-#   name        - 项目标识（唯一）
-#   aliases     - 别名列表，方便口语化调用
-#   path        - 项目绝对路径（支持 ~）
-#   description - 项目描述
-#   tags        - 标签（可选）
+#   2. 配置 scan_dirs，然后运行: bash scripts/scan-projects.sh
+#   3. 或手动添加项目
+
+# 扫描目录 — 运行 scan-projects.sh 时自动扫描这些目录下的 git 仓库
+# 支持多个目录，用户说"扫描项目"时直接读取，无需传参
+scan_dirs:
+  - ~/Documents/code
 
 projects:
   - name: my-app

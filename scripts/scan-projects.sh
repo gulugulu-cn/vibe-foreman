@@ -1,75 +1,109 @@
 #!/bin/bash
-# 扫描目录下的 git 仓库，自动生成 projects.yaml
-# 用法: bash scripts/scan-projects.sh [目录] [--append]
+# 扫描目录下的 git 仓库，生成/更新 projects.yaml
+# 用法: bash scripts/scan-projects.sh [目录...]
 #
-# 不传目录默认扫描 ~/Documents/code
-# --append 追加到已有 projects.yaml，不覆盖
+# 不传目录 → 从 projects.yaml 的 scan_dirs 读取
+# 传目录 → 扫描指定目录
 
-SCAN_DIR="${1:-$HOME/Documents/code}"
-APPEND=false
 HUB_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 YAML_FILE="$HUB_DIR/projects.yaml"
 
-# 检查 --append 参数
-for arg in "$@"; do
-  [ "$arg" = "--append" ] && APPEND=true
-done
+# 收集扫描目录
+SCAN_DIRS=()
 
-# 展开 ~
-SCAN_DIR="${SCAN_DIR/#\~/$HOME}"
-
-if [ ! -d "$SCAN_DIR" ]; then
-  echo "目录不存在: $SCAN_DIR"
-  exit 1
+if [ $# -gt 0 ]; then
+  # 命令行传入的目录
+  for arg in "$@"; do
+    SCAN_DIRS+=("${arg/#\~/$HOME}")
+  done
+elif [ -f "$YAML_FILE" ]; then
+  # 从 projects.yaml 的 scan_dirs 读取
+  while IFS= read -r line; do
+    dir=$(echo "$line" | sed 's/^[[:space:]]*-[[:space:]]*//' | sed "s|~|$HOME|g")
+    [ -d "$dir" ] && SCAN_DIRS+=("$dir")
+  done < <(grep -A 100 '^scan_dirs:' "$YAML_FILE" | tail -n +2 | grep '^  -' | sed '/^[a-z]/q' | head -20)
 fi
 
-echo "扫描 $SCAN_DIR 下的 git 仓库..."
+# 默认目录
+if [ ${#SCAN_DIRS[@]} -eq 0 ]; then
+  SCAN_DIRS=("$HOME/Documents/code")
+fi
 
-# 收集项目
+echo "扫描目录:"
+for d in "${SCAN_DIRS[@]}"; do echo "  $d"; done
+echo ""
+
+# 收集已有项目（避免重复）
+EXISTING=""
+if [ -f "$YAML_FILE" ]; then
+  EXISTING=$(grep 'name:' "$YAML_FILE" | sed 's/.*name:[[:space:]]*//')
+fi
+
+# 扫描所有目录
 PROJECTS=""
 COUNT=0
+SKIP=0
 
-for dir in "$SCAN_DIR"/*/; do
-  [ ! -d "$dir/.git" ] && continue
+for SCAN_DIR in "${SCAN_DIRS[@]}"; do
+  [ ! -d "$SCAN_DIR" ] && continue
 
-  NAME=$(basename "$dir")
-  PATH_STR="${dir%/}"
-  # 用 ~ 缩短路径
-  PATH_STR="${PATH_STR/#$HOME/~}"
+  for dir in "$SCAN_DIR"/*/; do
+    [ ! -d "$dir/.git" ] && continue
 
-  PROJECTS+="  - name: $NAME
+    NAME=$(basename "$dir")
+
+    # 跳过已存在的
+    if echo "$EXISTING" | grep -q "^${NAME}$"; then
+      SKIP=$((SKIP + 1))
+      continue
+    fi
+
+    PATH_STR="${dir%/}"
+    PATH_STR="${PATH_STR/#$HOME/~}"
+
+    PROJECTS+="  - name: $NAME
     path: $PATH_STR
     description: \"\"
     tags: []
 
 "
-  COUNT=$((COUNT + 1))
-  echo "  发现: $NAME ($PATH_STR)"
+    COUNT=$((COUNT + 1))
+    echo "  新增: $NAME ($PATH_STR)"
+  done
 done
 
+[ $SKIP -gt 0 ] && echo "  跳过: $SKIP 个已存在的项目"
+echo ""
+
 if [ $COUNT -eq 0 ]; then
-  echo "未发现 git 仓库"
+  echo "没有新项目需要添加"
   exit 0
 fi
 
-echo ""
-echo "发现 $COUNT 个项目"
+echo "发现 $COUNT 个新项目"
 
-if [ "$APPEND" = true ] && [ -f "$YAML_FILE" ]; then
-  echo "" >> "$YAML_FILE"
-  echo "  # === 扫描添加 $(date '+%Y-%m-%d') ===" >> "$YAML_FILE"
-  echo "$PROJECTS" >> "$YAML_FILE"
-  echo "已追加到 $YAML_FILE"
-else
+# 确保 projects.yaml 存在
+if [ ! -f "$YAML_FILE" ]; then
+  # 读取 scan_dirs 参数生成 scan_dirs 配置
+  SCAN_DIRS_YAML=""
+  for d in "${SCAN_DIRS[@]}"; do
+    d="${d/#$HOME/~}"
+    SCAN_DIRS_YAML+="  - $d\n"
+  done
+
   cat > "$YAML_FILE" << EOF
-# 项目清单 - 由 scan-projects.sh 自动生成
-# 生成时间: $(date '+%Y-%m-%d %H:%M')
-# 扫描目录: $SCAN_DIR
-#
-# 你可以手动编辑此文件添加 aliases 和 description
+# 项目清单 - 由 scan-projects.sh 生成
 
+scan_dirs:
+$(echo -e "$SCAN_DIRS_YAML")
 projects:
 $PROJECTS
 EOF
-  echo "已写入 $YAML_FILE"
+  echo "已创建 $YAML_FILE"
+else
+  # 追加到已有文件
+  echo "" >> "$YAML_FILE"
+  echo "  # === 扫描添加 $(date '+%Y-%m-%d') ===" >> "$YAML_FILE"
+  echo -n "$PROJECTS" >> "$YAML_FILE"
+  echo "已追加到 $YAML_FILE"
 fi
