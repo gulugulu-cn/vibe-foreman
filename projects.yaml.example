@@ -1,0 +1,34 @@
+# 项目清单
+# Claude 调度中心通过此文件了解所有项目的位置和信息
+#
+# 使用方法：
+#   1. 复制此文件: cp projects.yaml.example projects.yaml
+#   2. 编辑 projects.yaml 添加你的项目
+#   3. 或运行: bash scripts/scan-projects.sh ~/your/code/dir
+#
+# 字段说明：
+#   name        - 项目标识（唯一）
+#   aliases     - 别名列表，方便口语化调用
+#   path        - 项目绝对路径（支持 ~）
+#   description - 项目描述
+#   tags        - 标签（可选）
+
+projects:
+  - name: my-app
+    aliases: [app, 前端]
+    path: ~/Documents/code/my-app
+    description: "示例前端项目"
+    tags: [frontend, react]
+
+  - name: my-api
+    aliases: [api, backend, 后端]
+    path: ~/Documents/code/my-api
+    description: "示例后端项目"
+    tags: [backend, go]
+
+  # 添加更多项目...
+  # - name: another-project
+  #   aliases: [another]
+  #   path: ~/Documents/code/another-project
+  #   description: "另一个项目"
+  #   tags: [tag1, tag2]

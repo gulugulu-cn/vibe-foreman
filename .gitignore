@@ -1,0 +1,8 @@
+memory/*.md
+!memory/.gitkeep
+.claude/
+.env
+*.log
+node_modules/
+sounds/
+projects.yaml
