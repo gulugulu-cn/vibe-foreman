@@ -3,6 +3,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod projects;
 mod watcher;
 
 use serde::{Deserialize, Serialize};
@@ -22,18 +23,20 @@ pub struct HubEvent {
     pub timestamp: String,
 }
 
-// 全局状态
 pub struct AppState {
     pub events: Mutex<Vec<HubEvent>>,
 }
 
-// 前端调用：获取历史事件
 #[tauri::command]
 fn get_events(state: tauri::State<AppState>) -> Vec<HubEvent> {
     state.events.lock().unwrap().clone()
 }
 
-// 前端调用：跳转到项目窗口
+#[tauri::command]
+fn get_projects() -> Vec<projects::Project> {
+    projects::load_projects()
+}
+
 #[tauri::command]
 fn focus_project(project: String) {
     #[cfg(target_os = "macos")]
@@ -51,15 +54,11 @@ fn focus_project(project: String) {
             .spawn()
             .ok();
     }
+}
 
-    #[cfg(target_os = "windows")]
-    {
-        // Windows: 激活 Windows Terminal
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "wt", "-w", "0", "focus-tab", "-t", "0"])
-            .spawn()
-            .ok();
-    }
+#[tauri::command]
+fn open_project(name: String, path: String, mode: String) {
+    projects::open_in_tmux(&name, &path, &mode);
 }
 
 fn main() {
@@ -68,11 +67,15 @@ fn main() {
         .manage(AppState {
             events: Mutex::new(Vec::new()),
         })
-        .invoke_handler(tauri::generate_handler![get_events, focus_project])
+        .invoke_handler(tauri::generate_handler![
+            get_events,
+            get_projects,
+            focus_project,
+            open_project
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
 
-            // 创建托盘菜单
             let show_item = MenuItemBuilder::with_id("show", "显示面板").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "退出").build(app)?;
             let menu = MenuBuilder::new(app)
@@ -81,7 +84,6 @@ fn main() {
                 .item(&quit_item)
                 .build()?;
 
-            // 创建托盘图标
             TrayIconBuilder::new()
                 .menu(&menu)
                 .tooltip("Claude Hub")
@@ -110,7 +112,6 @@ fn main() {
                 })
                 .build(app)?;
 
-            // 启动文件监听
             watcher::start_watching(handle);
 
             Ok(())

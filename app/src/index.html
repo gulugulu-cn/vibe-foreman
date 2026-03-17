@@ -14,7 +14,7 @@
     </header>
 
     <section class="projects" id="projectList">
-      <!-- 动态填充 -->
+      <div class="empty">加载中...</div>
     </section>
 
     <section class="events">
@@ -23,6 +23,16 @@
         <div class="empty">等待通知...</div>
       </div>
     </section>
+  </div>
+
+  <!-- 右键/点击菜单 -->
+  <div class="context-menu" id="contextMenu" style="display:none">
+    <div class="menu-item" onclick="menuAction('claude')">📟 Claude Code</div>
+    <div class="menu-item" onclick="menuAction('claude-skip')">⚡ Claude Code (跳过权限)</div>
+    <div class="menu-item" onclick="menuAction('terminal')">💻 终端</div>
+    <div class="menu-item separator"></div>
+    <div class="menu-item" onclick="menuAction('finder')">📁 Finder</div>
+    <div class="menu-item" onclick="menuAction('vscode')">🔧 VS Code</div>
   </div>
 
   <script src="main.js"></script>

@@ -1,56 +1,58 @@
 // Claude Hub 状态面板
-// 通过 Tauri IPC 从 Rust 后端接收事件
 
 const { listen } = window.__TAURI__.event;
 const { invoke } = window.__TAURI__.core;
 
-// 状态存储
 const state = {
-  projects: {},  // { name: { status, message, time } }
-  events: [],    // [{ type, project, message, timestamp }]
+  projects: [],
+  events: [],
+  menuTarget: null, // 当前弹出菜单的项目
 };
 
-// 初始化
 async function init() {
-  // 监听来自 Rust 的事件
+  // 监听 Rust 后端事件
   await listen('hub-event', (event) => {
     handleEvent(event.payload);
   });
+
+  // 加载项目列表
+  await refreshProjects();
 
   // 加载历史事件
   try {
     const history = await invoke('get_events');
     history.forEach(handleEvent);
-  } catch (e) {
-    console.log('No history:', e);
-  }
+  } catch (e) {}
+
+  // 每 5 秒刷新项目状态
+  setInterval(refreshProjects, 5000);
+
+  // 点击空白处关闭菜单
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.context-menu') && !e.target.closest('.project-item')) {
+      closeMenu();
+    }
+  });
+}
+
+async function refreshProjects() {
+  try {
+    state.projects = await invoke('get_projects');
+    renderProjects();
+    updateGlobalStatus();
+  } catch (e) {}
 }
 
 function handleEvent(data) {
-  // 更新项目状态
-  state.projects[data.project] = {
-    status: data.type === 'stop' ? 'done' : 'permission',
-    message: data.message,
-    time: formatTime(data.timestamp),
-  };
+  // 更新对应项目的最新状态
+  const proj = state.projects.find(p => p.name === data.project);
+  if (proj) {
+    proj.lastEvent = data;
+  }
 
-  // 添加到事件列表
   state.events.unshift(data);
   if (state.events.length > 20) state.events.pop();
 
-  render();
-}
-
-function formatTime(ts) {
-  try {
-    const d = new Date(ts);
-    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return ts;
-  }
-}
-
-function render() {
   renderProjects();
   renderEvents();
   updateGlobalStatus();
@@ -58,29 +60,88 @@ function render() {
 
 function renderProjects() {
   const list = document.getElementById('projectList');
-  const entries = Object.entries(state.projects);
 
-  if (entries.length === 0) {
-    list.innerHTML = '<div class="empty">没有活跃项目</div>';
+  if (state.projects.length === 0) {
+    list.innerHTML = '<div class="empty">没有项目，运行 scripts/scan-projects.sh</div>';
     return;
   }
 
-  list.innerHTML = entries.map(([name, info]) => `
-    <div class="project-item" data-project="${name}">
-      <div class="project-dot ${info.status}"></div>
-      <span class="project-name">${name}</span>
-      <span class="project-status">${statusText(info.status)}</span>
-      <span class="project-time">${info.time}</span>
-    </div>
-  `).join('');
+  // 运行中的排前面
+  const sorted = [...state.projects].sort((a, b) => {
+    if (a.running !== b.running) return b.running ? 1 : -1;
+    return 0;
+  });
 
-  // 点击跳转
+  list.innerHTML = sorted.map(p => {
+    const statusClass = p.running ? 'running' : 'idle';
+    const lastEvent = p.lastEvent;
+    let statusText = p.running ? '运行中' : '';
+    let timeText = '';
+
+    if (lastEvent) {
+      statusText = lastEvent.type === 'stop' ? '完成' : '等待授权';
+      timeText = formatTime(lastEvent.timestamp);
+    }
+
+    return `
+      <div class="project-item ${statusClass}" data-name="${p.name}" data-path="${p.path}" data-running="${p.running}">
+        <div class="project-dot ${statusClass}"></div>
+        <div class="project-info">
+          <span class="project-name">${p.name}</span>
+          <span class="project-desc">${p.description || ''}</span>
+        </div>
+        <div class="project-right">
+          <span class="project-status">${statusText}</span>
+          <span class="project-time">${timeText}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // 绑定点击
   list.querySelectorAll('.project-item').forEach(el => {
-    el.addEventListener('click', () => {
-      const project = el.dataset.project;
-      invoke('focus_project', { project });
+    el.addEventListener('click', (e) => {
+      const name = el.dataset.name;
+      const path = el.dataset.path;
+      const running = el.dataset.running === 'true';
+
+      if (running) {
+        invoke('focus_project', { project: name });
+      } else {
+        showMenu(e, name, path);
+      }
     });
   });
+}
+
+function showMenu(event, name, path) {
+  closeMenu();
+  state.menuTarget = { name, path };
+
+  const menu = document.getElementById('contextMenu');
+  menu.style.display = 'block';
+
+  // 定位到点击位置
+  const rect = event.currentTarget.getBoundingClientRect();
+  menu.style.top = rect.bottom + 4 + 'px';
+  menu.style.left = rect.left + 'px';
+
+  event.stopPropagation();
+}
+
+function closeMenu() {
+  document.getElementById('contextMenu').style.display = 'none';
+  state.menuTarget = null;
+}
+
+function menuAction(mode) {
+  if (!state.menuTarget) return;
+  const { name, path } = state.menuTarget;
+  invoke('open_project', { name, path, mode });
+  closeMenu();
+
+  // 延迟刷新
+  setTimeout(refreshProjects, 2000);
 }
 
 function renderEvents() {
@@ -91,7 +152,7 @@ function renderEvents() {
     return;
   }
 
-  list.innerHTML = state.events.map(e => `
+  list.innerHTML = state.events.slice(0, 10).map(e => `
     <div class="event-item">
       <span class="event-time">${formatTime(e.timestamp)}</span>
       <span class="event-icon ${e.type}">${e.type === 'stop' ? '●' : '⚠'}</span>
@@ -100,29 +161,34 @@ function renderEvents() {
   `).join('');
 }
 
-function statusText(status) {
-  switch (status) {
-    case 'done': return '完成';
-    case 'busy': return '工作中...';
-    case 'permission': return '等待授权';
-    default: return '空闲';
+function formatTime(ts) {
+  try {
+    const d = new Date(ts);
+    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return ts || '';
   }
 }
 
 function updateGlobalStatus() {
   const badge = document.getElementById('globalStatus');
-  const statuses = Object.values(state.projects).map(p => p.status);
+  const hasRunning = state.projects.some(p => p.running);
+  const hasPermission = state.events.some(e => e.type === 'permission' &&
+    (Date.now() - new Date(e.timestamp).getTime()) < 60000);
 
-  if (statuses.includes('permission')) {
+  if (hasPermission) {
     badge.textContent = '需要操作';
     badge.className = 'status-badge attention';
-  } else if (statuses.includes('busy')) {
-    badge.textContent = '工作中';
+  } else if (hasRunning) {
+    badge.textContent = `${state.projects.filter(p => p.running).length} 个运行中`;
     badge.className = 'status-badge busy';
   } else {
     badge.textContent = '就绪';
     badge.className = 'status-badge';
   }
 }
+
+// 暴露给 HTML onclick
+window.menuAction = menuAction;
 
 init();
