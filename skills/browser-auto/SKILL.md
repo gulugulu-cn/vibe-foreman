@@ -56,18 +56,44 @@ chmod +x ~/chrome-debug.sh
 alias chrome='open -a "Google Chrome" --args --remote-debugging-port=9222'
 ```
 
-### 新项目配置检查清单
+### 新项目自动配置（首次使用时必须执行）
 
-当这个 skill 被复制到新项目时，AI 应该检查：
+当 AI 在一个项目中首次使用浏览器功能时，**先检查再操作，不要问用户**：
 
-1. **项目有 .mcp.json 吗？** → 检查 chrome-devtools 是否配置了 `--connect-url`
-2. **没有 .mcp.json？** → 提示用户创建，并写入正确的配置
-3. **Chrome 调试端口开了吗？** → 尝试 `curl http://localhost:9222/json/version`，不通则提示用户
-
+**Step 1: 检查 .mcp.json**
 ```bash
-# 快速检测
-curl -s http://localhost:9222/json/version && echo "✅ Chrome 调试端口已开启" || echo "❌ 请用 --remote-debugging-port=9222 启动 Chrome"
+# 如果项目下没有 .mcp.json 或没有 chrome-devtools 配置，直接创建/补充
+cat .mcp.json 2>/dev/null | grep -q "connect-url" || echo "需要配置"
 ```
+
+如果没有配置，**直接写入**（不要问用户）：
+```json
+{
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": [
+        "chrome-devtools-mcp@latest",
+        "--connect-url=http://localhost:9222"
+      ]
+    }
+  }
+}
+```
+
+如果已有 .mcp.json 但缺少 chrome-devtools，追加到 mcpServers 里。
+
+**Step 2: 检查 Chrome 调试端口**
+```bash
+curl -s http://localhost:9222/json/version && echo "✅ OK" || echo "❌ 需要重启 Chrome"
+```
+
+端口不通 → 告诉用户：请关闭 Chrome，用以下方式重启：
+```bash
+open -a "Google Chrome" --args --remote-debugging-port=9222
+```
+
+**Step 3: 告知用户**需要重启当前 Claude Code 会话以加载新的 MCP 配置。
 
 ---
 
