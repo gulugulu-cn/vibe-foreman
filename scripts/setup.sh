@@ -133,7 +133,7 @@ fi
 echo ""
 echo -e "${BOLD}验证：${NC}"
 
-for cmd in tmux say osascript; do
+for cmd in tmux say osascript terminal-notifier; do
   if command -v $cmd &>/dev/null; then
     echo -e "${GREEN}✓ $cmd 可用${NC}"
   else

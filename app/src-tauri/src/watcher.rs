@@ -92,8 +92,8 @@ fn send_notification(app: &AppHandle, event: &HubEvent) {
     // macOS: 播放语音
     #[cfg(target_os = "macos")]
     {
-        let hub_dir = dirs_next::home_dir()
-            .map(|h| h.join("Documents/code/claude-hub/sounds"))
+        let hub_dir = std::env::var("HOME")
+            .map(|h| std::path::PathBuf::from(h).join("Documents/code/claude-hub/sounds"))
             .unwrap_or_default();
 
         let pattern = if event.event_type == "stop" { "done" } else { "auth" };

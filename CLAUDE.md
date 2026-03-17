@@ -32,16 +32,12 @@ bash ~/Documents/code/claude-hub/scripts/setup.sh
 
 用户说"开发 xxx"或"打开 xxx"时，**立即**：
 1. 从 `projects.yaml` 查找项目路径（支持别名匹配）
-2. 如果 hub session 不存在，用第一个项目直接创建 session：
+2. **关键：必须先确保客户端已连接，再创建窗口！**
+   project-menu.sh 有 30 秒超时，如果先创建窗口再连客户端，用户看到时菜单已超时。
+3. 如果 hub session 不存在：
    ```bash
-   tmux new-session -d -s hub -n {name} -c {path} "bash ~/Documents/code/claude-hub/scripts/project-menu.sh '{name}' '{path}'"
-   ```
-3. 如果 hub session 已存在，检查窗口是否存在，不存在则添加：
-   ```bash
-   tmux new-window -t hub -n {name} -c {path} "bash ~/Documents/code/claude-hub/scripts/project-menu.sh '{name}' '{path}'"
-   ```
-4. 如果没有 tmux -CC 客户端连接，自动在当前窗口新标签页打开：
-   ```bash
+   # 先创建空 session + 连接客户端
+   tmux new-session -d -s hub -n _init
    osascript <<'APPLESCRIPT'
    tell application "iTerm2"
      tell current window
@@ -53,6 +49,14 @@ bash ~/Documents/code/claude-hub/scripts/setup.sh
      end tell
    end tell
    APPLESCRIPT
+   sleep 2  # 等客户端连上
+   # 再创建项目窗口
+   tmux new-window -t hub -n {name} -c {path} "bash ~/Documents/code/claude-hub/scripts/project-menu.sh '{name}' '{path}'"
+   tmux kill-window -t hub:_init 2>/dev/null
+   ```
+4. 如果 hub session 已存在且客户端已连接，直接添加窗口：
+   ```bash
+   tmux new-window -t hub -n {name} -c {path} "bash ~/Documents/code/claude-hub/scripts/project-menu.sh '{name}' '{path}'"
    ```
 5. 告知用户窗口已打开
 

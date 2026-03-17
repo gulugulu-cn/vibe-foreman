@@ -36,12 +36,16 @@ cat > "$EVENTS_DIR/$(date +%s%N 2>/dev/null || date +%s).json" << EOF
 }
 EOF
 
-# Fallback: 如果 Tauri app 没运行，用 osascript
-if ! pgrep -x "Claude Hub" >/dev/null 2>&1 && ! pgrep -x "claude-hub" >/dev/null 2>&1; then
+# 桌面通知（点击跳转 iTerm2）
+if command -v terminal-notifier &>/dev/null; then
+  terminal-notifier -title "⚠️ ${NAME}" -message "$MSG" -sound Basso -activate com.googlecode.iterm2 2>/dev/null
+else
   osascript -e "display notification \"${NAME} ${MSG}\" with title \"⚠️ 需要授权\" sound name \"Basso\"" 2>/dev/null
-  AUTH_FILES=("$SOUNDS_DIR"/auth*.aiff)
-  if [ ${#AUTH_FILES[@]} -gt 0 ]; then
-    SOUND="${AUTH_FILES[$((RANDOM % ${#AUTH_FILES[@]}))]}"
-    afplay "$SOUND" 2>/dev/null
-  fi
+fi
+
+# 语音播报
+AUTH_FILES=("$SOUNDS_DIR"/auth*.aiff)
+if [ ${#AUTH_FILES[@]} -gt 0 ]; then
+  SOUND="${AUTH_FILES[$((RANDOM % ${#AUTH_FILES[@]}))]}"
+  afplay "$SOUND" 2>/dev/null
 fi

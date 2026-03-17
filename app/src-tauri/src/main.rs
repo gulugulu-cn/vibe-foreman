@@ -8,7 +8,7 @@ mod watcher;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::{
-    AppHandle, Manager,
+    Manager,
     menu::{MenuBuilder, MenuItemBuilder},
     tray::TrayIconBuilder,
 };
