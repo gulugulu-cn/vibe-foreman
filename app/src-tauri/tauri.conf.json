@@ -1,0 +1,32 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicholasxjy/nicholasxjy.github.io/refs/heads/main/tauri-v2-schema.json",
+  "productName": "Claude Hub",
+  "version": "0.1.0",
+  "identifier": "dev.hengjun.claude-hub",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Claude Hub",
+        "width": 360,
+        "height": 480,
+        "resizable": true,
+        "visible": false,
+        "decorations": true,
+        "transparent": false
+      }
+    ],
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true
+    }
+  },
+  "plugins": {
+    "notification": {
+      "all": true
+    }
+  }
+}

@@ -14,31 +14,43 @@ NAME="${NAME:-$(basename "$PWD" 2>/dev/null)}"
 
 HUB_DIR="$HOME/Documents/code/claude-hub"
 SOUNDS_DIR="$HUB_DIR/sounds"
+SIGNAL_DIR="/tmp/hub-signals"
+EVENTS_DIR="$SIGNAL_DIR/events"
 
-# 随机选一条完成语（桌面通知用）
+# 随机选一条完成语
 MESSAGES=(
-  "${NAME} 搞定了，来看看"
-  "${NAME} 干完了，等你验收"
-  "${NAME} 这边好了"
-  "${NAME} 完事儿了"
-  "${NAME} 做好了，请过目"
+  "搞定了，来看看"
+  "干完了，等你验收"
+  "这边好了"
+  "完事儿了"
+  "做好了，请过目"
 )
-IDX=$((RANDOM % ${#MESSAGES[@]}))
-MSG="${MESSAGES[$IDX]}"
+MSG="${MESSAGES[$((RANDOM % ${#MESSAGES[@]}))]}"
 
-# 桌面通知
-osascript -e "display notification \"${MSG}\" with title \"🤖 调度中心\" sound name \"Glass\"" 2>/dev/null
+# 写 JSON 事件文件（供 Tauri app 读取）
+mkdir -p "$EVENTS_DIR"
+cat > "$EVENTS_DIR/$(date +%s%N 2>/dev/null || date +%s).json" << EOF
+{
+  "type": "stop",
+  "project": "${NAME}",
+  "message": "${MSG}",
+  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%H:%M:%S)"
+}
+EOF
 
-# 语音播报（预生成的音频文件，不会被杀）
-DONE_FILES=("$SOUNDS_DIR"/done*.aiff)
-if [ ${#DONE_FILES[@]} -gt 0 ]; then
-  SOUND="${DONE_FILES[$((RANDOM % ${#DONE_FILES[@]}))]}"
-  afplay "$SOUND" 2>/dev/null
+# Fallback: 如果 Tauri app 没运行，用 osascript
+if ! pgrep -x "Claude Hub" >/dev/null 2>&1 && ! pgrep -x "claude-hub" >/dev/null 2>&1; then
+  osascript -e "display notification \"${NAME} ${MSG}\" with title \"🤖 调度中心\" sound name \"Glass\"" 2>/dev/null
+  # 语音播报
+  DONE_FILES=("$SOUNDS_DIR"/done*.aiff)
+  if [ ${#DONE_FILES[@]} -gt 0 ]; then
+    SOUND="${DONE_FILES[$((RANDOM % ${#DONE_FILES[@]}))]}"
+    afplay "$SOUND" 2>/dev/null
+  fi
 fi
 
 # hub tmux 信号（供程序化监控）
 if [ "$TMUX_SESSION" = "hub" ] && [ -n "$NAME" ]; then
-  SIGNAL_DIR="/tmp/hub-signals"
   mkdir -p "$SIGNAL_DIR"
   echo "$(date '+%H:%M:%S') $NAME done" > "$SIGNAL_DIR/hub-${NAME}-stop.result"
   tmux wait-for -S "hub-${NAME}-stop" 2>/dev/null

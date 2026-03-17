@@ -6,3 +6,5 @@ memory/*.md
 node_modules/
 sounds/
 projects.yaml
+app/src-tauri/target/
+app/node_modules/
