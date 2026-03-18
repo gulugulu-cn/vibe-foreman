@@ -12,13 +12,77 @@ bash ~/Documents/code/claude-hub/scripts/setup.sh
 
 自动完成：注入全局 Stop hook → 设置脚本权限 → 验证环境。换电脑跑一次即可。
 
+浏览器双引擎环境：
+```bash
+bash ~/Documents/code/claude-hub/scripts/setup-browser.sh
+```
+自动完成：安装 skill → 配置 MCP（User scope + autoConnect）→ 检查 Chrome 环境。
+
+## Skill 管理
+
+本项目的 skills 源文件在 `skills/` 目录下，通过符号链接分发到各处。
+
+### skill 发现优先级（Claude Code 内置机制）
+
+```
+项目级 .claude/skills/ > 用户级 ~/.claude/skills/
+```
+
+### 当前 skills 和安装状态
+
+| Skill | 源文件 | 全局 (~/.claude/skills/) | 项目级 |
+|-------|--------|--------------------------|--------|
+| browser-auto | skills/browser-auto/SKILL.md | ✅ 符号链接 | 按需安装到各项目 .claude/skills/ |
+| tmux-hub | skills/tmux-hub/SKILL.md | ✅ | — |
+| lanhu-design-viewer | skills/lanhu-design-viewer/SKILL.md | ✅ | — |
+
+### 给其他项目安装 skill
+
+```bash
+# 方法 1：setup-browser.sh 自动安装（浏览器 skill）
+cd <项目目录> && bash ~/Documents/code/claude-hub/scripts/setup-browser.sh
+
+# 方法 2：手动符号链接（任意 skill）
+mkdir -p <项目>/.claude/skills/<skill-name>
+ln -sf ~/Documents/code/claude-hub/skills/<skill-name>/SKILL.md <项目>/.claude/skills/<skill-name>/SKILL.md
+```
+
+### 给其他项目批量安装 skill
+
+用户可能会说"给 acme-erp 装上 browser-auto"或"把所有 skill 同步到 xxx 项目"，直接执行：
+
+```bash
+# 单个 skill
+mkdir -p <项目>/.claude/skills/<skill-name>
+ln -sf ~/Documents/code/claude-hub/skills/<skill-name>/SKILL.md <项目>/.claude/skills/<skill-name>/SKILL.md
+
+# 批量：把所有 skill 装到某个项目
+for skill in ~/Documents/code/claude-hub/skills/*/; do
+  name=$(basename "$skill")
+  mkdir -p <项目>/.claude/skills/$name
+  ln -sf "$skill/SKILL.md" <项目>/.claude/skills/$name/SKILL.md
+done
+```
+
+### 给别人分享
+
+别人拿到 claude-hub 仓库后，跑 `bash scripts/setup-browser.sh` 一条命令即可。脚本自动：安装 skill 到 ~/.claude/skills/ → 配置 MCP → 检查 Chrome 环境。
+
+### 核心定位
+
+**claude-hub 是所有 skill 的唯一源头。** 所有 skill 的源文件只在 `claude-hub/skills/` 里维护，其他项目通过符号链接引用。修改只改源文件，全局自动生效。用户需要给某个项目配 skill 时，由 hub 负责安装符号链接。
+
 ## 启动序列
 
 每次新会话启动时，**立即自动执行**以下步骤（不询问用户、不等待确认）：
 
-1. **显示项目列表** — `bash scripts/welcome.sh`
-2. **检查 tmux hub** — `tmux has-session -t hub 2>/dev/null`，报告状态
-3. **报告就绪** — 一句话告知用户调度中心已就绪
+1. **启动通知面板** — 检查 `pgrep -f "target/.*claude-hub"` 是否已运行，未运行则后台启动：
+   ```bash
+   cd ~/Documents/code/claude-hub/app && ~/.cargo/bin/cargo tauri dev &>/dev/null &
+   ```
+2. **显示项目列表** — `bash scripts/welcome.sh`
+3. **检查 tmux hub** — `tmux has-session -t hub 2>/dev/null`，报告状态
+4. **报告就绪** — 一句话告知用户调度中心已就绪
 
 ## 核心规则
 
@@ -62,9 +126,41 @@ bash ~/Documents/code/claude-hub/scripts/setup.sh
 
 ## 浏览器操作（/browser-auto skill）
 
-用户需要打开网页、查看设计稿、测试前端时：
-- Claude in Chrome（视觉引擎）+ chrome-devtools-mcp（数据引擎）双引擎协同
-- 如果 Claude in Chrome 连不上，自动通过 chrome-devtools-mcp 重启扩展
+用户需要打开网页、查看设计稿、测试前端时，使用 `/browser-auto` skill。
+
+### 核心架构
+
+两个引擎连接**同一个 Chrome 浏览器**（用户日常使用的那个）：
+- **Claude in Chrome**（视觉引擎）— 截图、点击、看 UI 效果
+- **chrome-devtools-mcp**（数据引擎）— DOM、网络请求、控制台、JS 执行
+
+### 关键配置（不能搞错）
+
+chrome-devtools-mcp 必须用 `--autoConnect` 连接用户日常 Chrome，**不能**用默认模式（会启动独立 Chrome）：
+```bash
+# 正确：User scope + autoConnect（全局生效，连用户日常 Chrome）
+claude mcp add -s user chrome-devtools -- npx chrome-devtools-mcp@latest --autoConnect
+
+# 错误：不带 --autoConnect 会启动独立 Chrome，和 Claude in Chrome 不在同一个浏览器
+```
+
+用户的 Chrome 需要开启 remote debugging（一次性操作，持久生效）：
+1. Chrome 地址栏输入 `chrome://inspect/#remote-debugging`
+2. 点击 Enable 开关
+
+### 环境配置脚本
+
+```bash
+bash ~/Documents/code/claude-hub/scripts/setup-browser.sh
+```
+
+一键检查：Chrome 版本（需 >= 144）、Claude in Chrome 扩展、MCP 配置、调试端口、冲突检测。
+
+### 故障处理
+
+- Claude in Chrome 连不上 → 自动通过 chrome-devtools-mcp 重启扩展（详见 skill）
+- chrome-devtools 连到独立 Chrome → 检查 `claude mcp get chrome-devtools`，确认有 `--autoConnect`
+- `--autoConnect` 失败 → 让用户去 `chrome://inspect/#remote-debugging` 开启开关
 
 ## 异步任务监控（零配置）
 

@@ -46,6 +46,31 @@ header h1 {
 .status-badge.busy { background: #2d3a5e; color: #60a5fa; }
 .status-badge.attention { background: #4a2d2d; color: #f87171; }
 
+/* 搜索框 */
+.search-box {
+  margin-bottom: 8px;
+}
+
+.search-box input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+  background: #16162a;
+  color: #e0e0e0;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.search-box input::placeholder {
+  color: #555;
+}
+
+.search-box input:focus {
+  border-color: #4a4a7a;
+}
+
 /* 项目列表 */
 .projects {
   flex: 1;

@@ -76,7 +76,7 @@ fn handle_event_file(app: &AppHandle, path: &Path) {
 }
 
 fn send_notification(app: &AppHandle, event: &HubEvent) {
-    let (title, icon) = match event.event_type.as_str() {
+    let (title, _icon) = match event.event_type.as_str() {
         "stop" => (format!("✅ {}", event.project), "done"),
         "permission" => (format!("⚠️ {} 需要授权", event.project), "attention"),
         _ => (event.project.clone(), "info"),

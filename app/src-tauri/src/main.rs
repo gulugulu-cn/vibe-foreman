@@ -1,5 +1,4 @@
 // Claude Hub - 通知托盘 + 状态面板
-// 监听 /tmp/hub-signals/events/ 目录，接收 Claude Code hooks 的事件
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -10,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::{
     Manager,
-    menu::{MenuBuilder, MenuItemBuilder},
-    tray::TrayIconBuilder,
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,37 +73,41 @@ fn main() {
             open_project
         ])
         .setup(|app| {
+            // 窗口关闭 → 隐藏
             let handle = app.handle().clone();
+            if let Some(window) = app.get_webview_window("main") {
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        if let Some(win) = handle.get_webview_window("main") {
+                            win.hide().ok();
+                        }
+                    }
+                });
+            }
 
-            let show_item = MenuItemBuilder::with_id("show", "显示面板").build(app)?;
-            let quit_item = MenuItemBuilder::with_id("quit", "退出").build(app)?;
-            let menu = MenuBuilder::new(app)
-                .item(&show_item)
-                .separator()
-                .item(&quit_item)
-                .build()?;
+            // 右键菜单只放"退出"，左键点击负责 toggle 窗口
+            let quit_item = MenuItem::with_id(app, "quit", "退出 Claude Hub", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&quit_item])?;
 
-            TrayIconBuilder::new()
+            // 托盘图标（必须显式设置 icon，TrayIconBuilder 不继承 config）
+            let _tray = TrayIconBuilder::new()
+                .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?)
                 .menu(&menu)
+                .show_menu_on_left_click(false)
                 .tooltip("Claude Hub")
-                .on_menu_event(move |app, event| {
-                    match event.id().as_ref() {
-                        "show" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                window.show().ok();
-                                window.set_focus().ok();
-                            }
-                        }
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        _ => {}
+                .on_menu_event(|app, event| {
+                    if event.id.as_ref() == "quit" {
+                        app.exit(0);
                     }
                 })
                 .on_tray_icon_event(|tray, event| {
-                    if let tauri::tray::TrayIconEvent::Click { .. } = event {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        ..
+                    } = event
+                    {
+                        if let Some(window) = tray.app_handle().get_webview_window("main") {
                             window.show().ok();
                             window.set_focus().ok();
                         }
@@ -112,7 +115,8 @@ fn main() {
                 })
                 .build(app)?;
 
-            watcher::start_watching(handle);
+            // 文件监听
+            watcher::start_watching(app.handle().clone());
 
             Ok(())
         })

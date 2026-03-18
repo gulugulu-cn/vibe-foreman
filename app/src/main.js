@@ -7,6 +7,7 @@ const state = {
   projects: [],
   events: [],
   menuTarget: null, // 当前弹出菜单的项目
+  searchQuery: '',
 };
 
 async function init() {
@@ -26,6 +27,13 @@ async function init() {
 
   // 每 5 秒刷新项目状态
   setInterval(refreshProjects, 5000);
+
+  // 搜索框
+  const searchInput = document.getElementById('searchInput');
+  searchInput.addEventListener('input', (e) => {
+    state.searchQuery = e.target.value.toLowerCase();
+    renderProjects();
+  });
 
   // 点击空白处关闭菜单
   document.addEventListener('click', (e) => {
@@ -66,8 +74,22 @@ function renderProjects() {
     return;
   }
 
+  // 搜索过滤（匹配名称、描述、路径）
+  const filtered = state.projects.filter(p => {
+    if (!state.searchQuery) return true;
+    const q = state.searchQuery;
+    return (p.name || '').toLowerCase().includes(q)
+      || (p.description || '').toLowerCase().includes(q)
+      || (p.path || '').toLowerCase().includes(q);
+  });
+
+  if (filtered.length === 0 && state.searchQuery) {
+    list.innerHTML = '<div class="empty">无匹配项目</div>';
+    return;
+  }
+
   // 运行中的排前面
-  const sorted = [...state.projects].sort((a, b) => {
+  const sorted = [...filtered].sort((a, b) => {
     if (a.running !== b.running) return b.running ? 1 : -1;
     return 0;
   });

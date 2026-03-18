@@ -19,114 +19,71 @@ chrome-devtools-mcp 默认行为是启动一个独立的 Chrome 实例（`--user
 - ❌ 没有用户的书签和设置
 - ❌ 和 Claude in Chrome 不在同一个浏览器，无法协同
 
-### 正确的连接方式
-
-chrome-devtools-mcp 必须通过 `--connect-url` 连接用户日常 Chrome 的调试端口：
-
-**MCP 配置（.mcp.json）：**
-```json
-{
-  "mcpServers": {
-    "chrome-devtools": {
-      "command": "npx",
-      "args": [
-        "chrome-devtools-mcp@latest",
-        "--connect-url=http://localhost:9222"
-      ]
-    }
-  }
-}
-```
-
-**用户的 Chrome 需要开启调试端口（一次性配置）：**
-
-macOS - 修改 Chrome 启动方式：
-```bash
-# 创建启动脚本
-cat > ~/chrome-debug.sh << 'EOF'
-#!/bin/bash
-open -a "Google Chrome" --args --remote-debugging-port=9222
-EOF
-chmod +x ~/chrome-debug.sh
-```
-
-或者直接改 Chrome 的启动参数（推荐，永久生效）：
-```bash
-# macOS: 修改 Chrome 的 Info.plist 或用 alias
-alias chrome='open -a "Google Chrome" --args --remote-debugging-port=9222'
-```
-
-### 新项目自动配置（首次使用时必须执行）
-
-当 AI 在一个项目中首次使用浏览器功能时，**先检查再操作，不要问用户**：
-
-**Step 1: 检查 .mcp.json**
-```bash
-# 如果项目下没有 .mcp.json 或没有 chrome-devtools 配置，直接创建/补充
-cat .mcp.json 2>/dev/null | grep -q "connect-url" || echo "需要配置"
-```
-
-如果没有配置，**直接写入**（不要问用户）：
-```json
-{
-  "mcpServers": {
-    "chrome-devtools": {
-      "command": "npx",
-      "args": [
-        "chrome-devtools-mcp@latest",
-        "--connect-url=http://localhost:9222"
-      ]
-    }
-  }
-}
-```
-
-如果已有 .mcp.json 但缺少 chrome-devtools，追加到 mcpServers 里。
-
-**Step 2: 检查 Chrome 调试端口**
-```bash
-curl -s http://localhost:9222/json/version && echo "✅ OK" || echo "❌ 需要重启 Chrome"
-```
-
-端口不通 → 告诉用户：请关闭 Chrome，用以下方式重启：
-```bash
-open -a "Google Chrome" --args --remote-debugging-port=9222
-```
-
-**Step 3: 告知用户**需要重启当前 Claude Code 会话以加载新的 MCP 配置。
-
 ---
 
-## 角色分工
+## 环境诊断（每次会话首次浏览器操作时必须执行）
 
-| 角色 | 引擎 | 用途 |
-|------|------|------|
-| **眼睛 + 手** | Claude in Chrome (`mcp__claude-in-chrome__*`) | 视觉理解、精准点击、看 UI 效果 |
-| **大脑 + 数据** | chrome-devtools-mcp (`mcp__chrome-devtools__*`) | DOM 树、网络请求、控制台、执行 JS、性能 |
-| **保姆** | chrome-devtools-mcp | Claude in Chrome 断开时自动重启扩展 |
+AI 在执行任何浏览器操作前，**必须按顺序完成以下 4 步检查**。如果某步失败，修复后再继续。
 
-两个引擎连接**同一个 Chrome 浏览器**（用户日常使用的那个），操作**同一个页面**。
+### Step 1: 检查 chrome-devtools-mcp 是否全局可用
 
-## 启动流程
-
-### Step 1: 检测环境
-
-```
-1. curl http://localhost:9222/json/version → Chrome 调试端口是否可用
-2. mcp__claude-in-chrome__tabs_context_mcp → 视觉引擎状态
-3. mcp__chrome-devtools__list_pages → 数据引擎状态
+```bash
+claude mcp get chrome-devtools 2>/dev/null
 ```
 
-| Chrome 调试端口 | 视觉引擎 | 数据引擎 | 策略 |
-|----------------|----------|----------|------|
-| 不可用 | - | - | 停止，提示用户用 `--remote-debugging-port=9222` 重启 Chrome |
-| 可用 | 可用 | 可用 | 双引擎协同（最佳） |
-| 可用 | 不可用 | 可用 | 先自动修复视觉引擎，修复后双引擎协同 |
-| 可用 | 可用 | 不可用 | 仅视觉引擎，检查 .mcp.json 中 chrome-devtools 配置 |
+| 结果 | 处理 |
+|------|------|
+| 未配置 | 执行下方"自动配置"命令 |
+| Local scope | 建议升级为 User scope（全局生效） |
+| User scope + `--autoConnect` | ✅ 正确，继续 |
+| 使用了默认参数（无 --autoConnect 或 --browserUrl） | ❌ 会启动独立 Chrome，需要修复 |
 
-### Step 2: 自动修复 Claude in Chrome
+**自动配置命令（User scope，全局生效）：**
+```bash
+claude mcp add chrome-devtools --scope user -s stdio -- npx chrome-devtools-mcp@latest --autoConnect
+```
 
-当 Claude in Chrome 连接失败时，用 chrome-devtools-mcp 自动重启扩展：
+> 配置完成后需要提示用户**重启 Claude Code 会话**才能生效。
+
+### Step 2: 检查 Chrome remote debugging 是否可达
+
+调用 `mcp__chrome-devtools__list_pages`。
+
+| 结果 | 处理 |
+|------|------|
+| 成功返回页面列表 | ✅ 继续 |
+| 失败/超时 | 引导用户操作（见下方） |
+
+**引导用户开启 Chrome remote debugging（一次性操作）：**
+
+方式一（推荐，Chrome 144+，支持 `--autoConnect`）：
+1. 打开 Chrome 浏览器
+2. 地址栏输入 `chrome://inspect/#remote-debugging`
+3. 点击 "Enable" 开关
+4. 完成！这个设置是持久的，Chrome 重启后依然生效
+
+方式二（备选，手动指定端口）：
+```bash
+# macOS: 用调试端口启动 Chrome
+open -a "Google Chrome" --args --remote-debugging-port=9222
+```
+如果用方式二，MCP 配置应改为：
+```bash
+claude mcp add chrome-devtools --scope user -s stdio -- npx chrome-devtools-mcp@latest --browserUrl http://localhost:9222
+```
+
+### Step 3: 检查 Claude in Chrome 是否可用
+
+调用 `mcp__claude-in-chrome__tabs_context_mcp`。
+
+| 结果 | 处理 |
+|------|------|
+| 成功返回标签页列表 | ✅ 继续 |
+| 失败 | 执行自动修复（Step 3a） |
+
+#### Step 3a: 自动修复 Claude in Chrome
+
+用 chrome-devtools-mcp 重启扩展：
 
 ```
 1. mcp__chrome-devtools__navigate_page → chrome://extensions/
@@ -150,6 +107,39 @@ open -a "Google Chrome" --args --remote-debugging-port=9222
 5. 等待 3 秒
 6. 重试 mcp__claude-in-chrome__tabs_context_mcp
 ```
+
+如果修复失败，提示用户：
+- 确认已安装 Claude in Chrome 扩展
+- 在 Chrome 扩展页面手动启用扩展
+- 检查扩展是否需要更新
+
+### Step 4: 验证双引擎同源
+
+分别调用两个引擎获取标签页：
+- `mcp__chrome-devtools__list_pages`
+- `mcp__claude-in-chrome__tabs_context_mcp`
+
+比对返回的标签页 URL，确认两者看到的是**同一个 Chrome 浏览器**。如果不一致，说明 chrome-devtools-mcp 连到了独立 Chrome，需要回到 Step 1 检查配置。
+
+**诊断全部通过后，报告状态：**
+```
+浏览器双引擎就绪
+  数据引擎 (chrome-devtools): ✅ 已连接
+  视觉引擎 (Claude in Chrome): ✅ 已连接
+  同源验证: ✅ 连接同一个 Chrome
+```
+
+---
+
+## 角色分工
+
+| 角色 | 引擎 | 用途 |
+|------|------|------|
+| **眼睛 + 手** | Claude in Chrome (`mcp__claude-in-chrome__*`) | 视觉理解、精准点击、看 UI 效果 |
+| **大脑 + 数据** | chrome-devtools-mcp (`mcp__chrome-devtools__*`) | DOM 树、网络请求、控制台、执行 JS、性能 |
+| **保姆** | chrome-devtools-mcp | Claude in Chrome 断开时自动重启扩展 |
+
+两个引擎连接**同一个 Chrome 浏览器**（用户日常使用的那个），操作**同一个页面**。
 
 ## 场景路由
 
@@ -239,3 +229,14 @@ open -a "Google Chrome" --args --remote-debugging-port=9222
 - `take_snapshot` 返回文本格式的 DOM 树（带 uid），比截图省 token，优先使用
 - 滚动内部容器时，chrome-devtools 需要用 JS：`document.querySelector('.容器').scrollBy(0, 500)`
 - Claude in Chrome 的权限确认弹窗需要用户手动点击，AI 无法自动处理
+
+## 故障排除
+
+| 问题 | 原因 | 解决 |
+|------|------|------|
+| chrome-devtools 连到了独立 Chrome | 没有用 `--autoConnect` 或 `--browserUrl` | 重新配置：`claude mcp add chrome-devtools --scope user -s stdio -- npx chrome-devtools-mcp@latest --autoConnect` |
+| `--autoConnect` 失败 | Chrome 没开 remote debugging | 访问 `chrome://inspect/#remote-debugging` 点 Enable |
+| Chrome 版本不支持 `--autoConnect` | Chrome < 144 | 更新 Chrome，或改用 `--browserUrl http://localhost:9222` + 手动启动调试端口 |
+| Claude in Chrome 反复断开 | 扩展崩溃或更新 | 执行 Step 3a 自动修复，或手动在 Chrome 扩展页重新启用 |
+| 两个引擎看到不同的标签页 | 连的不是同一个 Chrome | 检查 `claude mcp get chrome-devtools`，确认用了 `--autoConnect` |
+| `list_pages` 返回空 | Chrome 没有打开任何页面 | 正常现象，先用 `navigate_page` 打开一个页面 |
