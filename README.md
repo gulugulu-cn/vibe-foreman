@@ -26,15 +26,21 @@ bash scripts/scan-projects.sh ~/Documents/code    # 自动扫描
 cp projects.yaml.example projects.yaml
 vim projects.yaml
 
-# 4. 启动
+# 4. 浏览器自动化环境（可选）
+bash scripts/setup-browser.sh
+
+# 5. 启动
 claude
 ```
+
+启动后 Claude 会自动：拉起通知面板 → 显示项目列表 → 检查 tmux → 报告就绪。
 
 ## 前置条件
 
 - macOS + iTerm2
 - [tmux](https://github.com/tmux/tmux)
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
+- [Rust + Cargo](https://rustup.rs/)（通知面板需要）
 
 ## 工作原理
 
@@ -65,6 +71,34 @@ bash scripts/add-project.sh my-app ~/code/my-app app 前端
 bash scripts/welcome.sh
 ```
 
+## 通知面板（Tauri App）
+
+菜单栏托盘应用，实时展示项目状态和通知。
+
+- 左键点击托盘图标 → 显示面板
+- 关闭窗口 × → 隐藏到托盘（不退出）
+- 右键托盘 → 退出
+- 支持项目搜索（按名称/描述/路径模糊匹配）
+
+启动时 Claude 自动拉起，也可手动启动：
+
+```bash
+cd app && cargo tauri dev
+```
+
+## 浏览器自动化
+
+Claude in Chrome（视觉引擎）+ chrome-devtools-mcp（数据引擎）双引擎协同，连接同一个 Chrome 浏览器。
+
+```bash
+# 一键配置（安装 skill + 配置 MCP + 检查 Chrome 环境）
+bash scripts/setup-browser.sh
+```
+
+配置完成后需要：
+1. Chrome 地址栏输入 `chrome://inspect/#remote-debugging`，点击 Enable
+2. 重启 Claude Code 会话
+
 ## 全局 Hooks
 
 `setup.sh` 会在 `~/.claude/settings.json` 中注入两个全局 hook：
@@ -82,8 +116,12 @@ bash scripts/welcome.sh
 claude-hub/
 ├── CLAUDE.md                  # Hub 行为规范
 ├── projects.yaml.example      # 项目配置模板
+├── app/                       # 通知面板（Tauri v2）
+│   ├── src/                   # 前端（HTML + JS）
+│   └── src-tauri/             # 后端（Rust）
 ├── scripts/
 │   ├── setup.sh               # 一键初始化
+│   ├── setup-browser.sh       # 浏览器环境配置
 │   ├── scan-projects.sh       # 扫描目录发现项目
 │   ├── add-project.sh         # 添加项目
 │   ├── welcome.sh             # 项目列表展示
