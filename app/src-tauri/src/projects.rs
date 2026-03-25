@@ -123,6 +123,8 @@ pub fn open_in_tmux(name: &str, path: &str, mode: &str) {
             .ok();
     }
 
+    let need_cleanup = !hub_exists; // 新建 session 时需要清理 _init
+
     match mode {
         "claude" => {
             let cmd = format!("cd '{}' && claude", path);
@@ -160,6 +162,14 @@ pub fn open_in_tmux(name: &str, path: &str, mode: &str) {
                 .ok();
         }
         _ => return,
+    }
+
+    // 清理 _init 窗口（新建 session 时会产生）
+    if need_cleanup {
+        Command::new("tmux")
+            .args(["kill-window", "-t", "hub:_init"])
+            .status()
+            .ok();
     }
 
     // 确保 iTerm2 连接到 hub

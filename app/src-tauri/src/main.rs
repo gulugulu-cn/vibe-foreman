@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod projects;
+mod usage;
 mod watcher;
 
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,11 @@ fn get_events(state: tauri::State<AppState>) -> Vec<HubEvent> {
 #[tauri::command]
 fn get_projects() -> Vec<projects::Project> {
     projects::load_projects()
+}
+
+#[tauri::command]
+fn get_usage_stats(range: String) -> usage::UsageStats {
+    usage::compute_usage(&range)
 }
 
 #[tauri::command]
@@ -69,6 +75,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_events,
             get_projects,
+            get_usage_stats,
             focus_project,
             open_project
         ])

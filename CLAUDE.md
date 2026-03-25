@@ -76,9 +76,9 @@ done
 
 每次新会话启动时，**立即自动执行**以下步骤（不询问用户、不等待确认）：
 
-1. **启动通知面板** — 检查 `pgrep -f "target/.*claude-hub"` 是否已运行，未运行则后台启动：
+1. **启动通知面板** — 检查 `pgrep -f "claude-hub"` 是否已运行，未运行则后台启动：
    ```bash
-   cd ~/Documents/code/claude-hub/app && ~/.cargo/bin/cargo tauri dev &>/dev/null &
+   ~/Documents/code/claude-hub/app/src-tauri/target/release/claude-hub &>/dev/null &
    ```
 2. **显示项目列表** — `bash scripts/welcome.sh`
 3. **检查 tmux hub** — `tmux has-session -t hub 2>/dev/null`，报告状态

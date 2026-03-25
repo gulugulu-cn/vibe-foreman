@@ -8,4 +8,3 @@ sounds/
 projects.yaml
 app/src-tauri/target/
 app/node_modules/
-app/claude-hub-bin

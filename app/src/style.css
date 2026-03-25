@@ -46,6 +46,43 @@ header h1 {
 .status-badge.busy { background: #2d3a5e; color: #60a5fa; }
 .status-badge.attention { background: #4a2d2d; color: #f87171; }
 
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 2px;
+  background: #16162a;
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.tab {
+  border: none;
+  background: transparent;
+  color: #666;
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tab:hover {
+  color: #aaa;
+}
+
+.tab.active {
+  background: #2a2a4a;
+  color: #e0e0e0;
+}
+
+/* Views */
+.view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 /* 搜索框 */
 .search-box {
   margin-bottom: 8px;
@@ -188,6 +225,141 @@ header h1 {
   padding: 0;
   margin: 4px 8px;
   cursor: default;
+}
+
+/* Usage 视图 */
+.usage-summary {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.summary-item {
+  flex: 1;
+  text-align: center;
+  padding: 8px 4px;
+  background: #16162a;
+  border-radius: 6px;
+}
+
+.summary-value {
+  display: block;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-label {
+  font-size: 10px;
+  color: #666;
+  margin-top: 2px;
+}
+
+.usage-range {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.range-btn {
+  border: 1px solid #2a2a4a;
+  background: transparent;
+  color: #666;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.range-btn:hover {
+  color: #aaa;
+  border-color: #3a3a5a;
+}
+
+.range-btn.active {
+  background: #2a2a4a;
+  color: #e0e0e0;
+  border-color: #3a3a5a;
+}
+
+.usage-list {
+  flex: 1;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+.usage-item {
+  padding: 6px 0;
+  border-bottom: 1px solid #1e1e38;
+}
+
+.usage-item:last-child {
+  border-bottom: none;
+}
+
+.usage-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.usage-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.usage-tokens {
+  font-size: 12px;
+  font-weight: 600;
+  color: #60a5fa;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-bar-bg {
+  height: 4px;
+  background: #1e1e38;
+  border-radius: 2px;
+  margin-bottom: 3px;
+}
+
+.usage-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+
+.usage-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #555;
+}
+
+.usage-models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.model-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #1e2a3a;
+  color: #8bb4e0;
+  border: 1px solid #2a3a4e;
+}
+
+.model-tag em {
+  font-style: normal;
+  color: #557;
+  margin-left: 2px;
 }
 
 /* 通知列表 */

@@ -10,16 +10,36 @@
   <div class="container">
     <header>
       <h1>Claude Hub</h1>
+      <div class="tabs">
+        <button class="tab active" data-tab="projects" onclick="switchTab('projects')">项目</button>
+        <button class="tab" data-tab="usage" onclick="switchTab('usage')">用量</button>
+      </div>
       <span class="status-badge" id="globalStatus">就绪</span>
     </header>
 
-    <div class="search-box">
-      <input type="text" id="searchInput" placeholder="搜索项目..." autocomplete="off" spellcheck="false">
+    <!-- 项目视图 -->
+    <div id="projectsView" class="view active">
+      <div class="search-box">
+        <input type="text" id="searchInput" placeholder="搜索项目..." autocomplete="off" spellcheck="false">
+      </div>
+
+      <section class="projects" id="projectList">
+        <div class="empty">加载中...</div>
+      </section>
     </div>
 
-    <section class="projects" id="projectList">
-      <div class="empty">加载中...</div>
-    </section>
+    <!-- 用量视图 -->
+    <div id="usageView" class="view" style="display:none">
+      <div class="usage-summary" id="usageSummary"></div>
+      <div class="usage-range">
+        <button class="range-btn" data-range="7d" onclick="loadUsage('7d')">7天</button>
+        <button class="range-btn" data-range="30d" onclick="loadUsage('30d')">30天</button>
+        <button class="range-btn active" data-range="all" onclick="loadUsage('all')">全部</button>
+      </div>
+      <div class="usage-list" id="usageList">
+        <div class="empty">加载中...</div>
+      </div>
+    </div>
 
     <section class="events">
       <h2>最近通知</h2>
