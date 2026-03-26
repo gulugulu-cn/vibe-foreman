@@ -157,3 +157,13 @@ echo -e "  ${CYAN}Stop${NC}         → Claude 做完事通知你（桌面弹窗
 echo -e "  ${CYAN}Notification${NC} → Claude 需要授权时通知你"
 echo ""
 echo -e "${YELLOW}子窗口的 Claude 需要重启才能生效。${NC}"
+
+# 编译托盘 app（如果还没编译）
+APP_BIN="$HUB_DIR/app/src-tauri/target/release/claude-hub"
+if [ ! -f "$APP_BIN" ]; then
+  echo ""
+  echo -e "${YELLOW}托盘 app 尚未编译，正在编译（首次需要几分钟）...${NC}"
+  bash "$HUB_DIR/scripts/build-app.sh"
+else
+  echo -e "${GREEN}✓ 托盘 app 已编译${NC}"
+fi
