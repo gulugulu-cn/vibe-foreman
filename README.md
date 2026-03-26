@@ -37,10 +37,11 @@ claude
 
 ## 前置条件
 
-- macOS + iTerm2
-- [tmux](https://github.com/tmux/tmux)
+- macOS（Apple Silicon / Intel 均可）+ iTerm2
+- [tmux](https://github.com/tmux/tmux) — `brew install tmux`
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
-- [Rust + Cargo](https://rustup.rs/)（通知面板需要）
+- Xcode Command Line Tools — `xcode-select --install`
+- Rust 工具链 — `setup.sh` 首次运行时**自动安装**，无需手动操作
 
 ## 工作原理
 
@@ -79,11 +80,20 @@ bash scripts/welcome.sh
 - 关闭窗口 × → 隐藏到托盘（不退出）
 - 右键托盘 → 退出
 - 支持项目搜索（按名称/描述/路径模糊匹配）
+- **用量统计** — 按项目查看 token 消耗、会话数、模型分布
 
-启动时 Claude 自动拉起，也可手动启动：
+`setup.sh` 首次运行会自动编译 release 版本（约 2-3 分钟），之后每次启动直接运行二进制，秒开。编译产物是本机架构（ARM/x86），不会提交到 git。
+
+手动编译/重新编译：
 
 ```bash
-cd app && cargo tauri dev
+bash scripts/build-app.sh
+```
+
+也可以在`~/.zshrc`中添加别名一键启动调度中心（含自动拉起托盘 app）：
+
+```bash
+alias cc="bash ~/Documents/code/claude-hub/scripts/cc.sh"
 ```
 
 ## 浏览器自动化
@@ -120,8 +130,10 @@ claude-hub/
 │   ├── src/                   # 前端（HTML + JS）
 │   └── src-tauri/             # 后端（Rust）
 ├── scripts/
-│   ├── setup.sh               # 一键初始化
+│   ├── setup.sh               # 一键初始化（含自动编译）
 │   ├── setup-browser.sh       # 浏览器环境配置
+│   ├── build-app.sh           # 编译托盘 app（检查环境 + release 构建）
+│   ├── cc.sh                  # 一键启动（托盘 app + 调度中心）
 │   ├── scan-projects.sh       # 扫描目录发现项目
 │   ├── add-project.sh         # 添加项目
 │   ├── welcome.sh             # 项目列表展示
