@@ -104,6 +104,15 @@ else
   echo -e "${GREEN}✓ projects.yaml 已存在${NC}"
 fi
 
+# 配置 iTerm2 tmux 集成（命令行直接写 plist，无需手动去 GUI 勾选）
+if command -v defaults &>/dev/null; then
+  # tmux 窗口显示为 iTerm2 原生标签页（0=Native windows, 2=Tabs in new window）
+  defaults write com.googlecode.iterm2 OpenTmuxWindowsIn -int 2
+  # 连接后自动隐藏 tmux 控制会话
+  defaults write com.googlecode.iterm2 AutoHideTmuxClientSession -bool true
+  echo -e "${GREEN}✓ iTerm2 tmux 集成已配置${NC}"
+fi
+
 # 确保脚本有执行权限
 chmod +x "$HUB_DIR/scripts/"*.sh
 echo -e "${GREEN}✓ 脚本权限已设置${NC}"

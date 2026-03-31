@@ -29,18 +29,20 @@ brew install node
 npm install -g @anthropic-ai/claude-code
 ```
 
-### 2. 配置 iTerm2（关键！不配体验会很差）
+### 2. iTerm2 tmux 集成（setup.sh 自动配置）
 
-项目使用 `tmux -CC` 模式（iTerm2 专属），让 tmux 窗口显示为**原生标签页**，而不是终端内的分屏。
+项目使用 `tmux -CC` 模式（iTerm2 专属），让 tmux 窗口显示为**原生标签页**。
 
-打开 iTerm2 → **Settings** (⌘,) → **General** → **tmux**：
+`setup.sh` 会自动执行以下配置，**无需手动去 GUI 里勾选**：
 
-| 选项 | 设置 | 说明 |
-|------|------|------|
-| When attaching, open unrecognized windows in | **Tabs in a new window** | tmux 窗口显示为 iTerm2 标签页 |
-| Automatically bury the tmux client session after connecting | **✅ 勾选** | 连接后隐藏控制会话，避免多余的空白标签 |
+```bash
+# tmux 窗口显示为 iTerm2 标签页（而非独立窗口）
+defaults write com.googlecode.iterm2 OpenTmuxWindowsIn -int 2
+# 连接后自动隐藏 tmux 控制会话（避免多余的空白标签）
+defaults write com.googlecode.iterm2 AutoHideTmuxClientSession -bool true
+```
 
-> **为什么需要这两项？** Hub 通过 `tmux -CC attach` 让 iTerm2 接管 tmux 窗口的渲染。不勾选第一项，每个项目窗口会变成独立的终端窗口而非标签页；不勾选第二项，会多出一个无用的控制台标签页。
+如果需要手动验证，可以打开 iTerm2 → **Settings** (⌘,) → **General** → **tmux** 查看这两项是否已勾选。
 
 ### 3. macOS 权限授权
 
