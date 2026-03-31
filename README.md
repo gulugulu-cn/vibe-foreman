@@ -8,40 +8,100 @@ Claude Code 本地开发调度中心。用一个 Claude 窗口管理所有项目
 - **全局通知** — 任何 Claude 做完事 → 桌面弹窗 + 语音提醒
 - **权限通知** — 任何 Claude 等授权 → 立即提醒你去操作
 - **项目发现** — 扫描目录自动生成项目清单
+- **用量统计** — 按项目查看 token 消耗、会话数、模型分布
 - **浏览器自动化** — Claude in Chrome + DevTools 双引擎协同
 
-## 快速开始
+## 新电脑完整安装
+
+### 1. 安装前置依赖
 
 ```bash
-# 1. 克隆
+# Homebrew（如果没有）
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# 必需
+brew install tmux
+brew install terminal-notifier
+xcode-select --install
+
+# Claude Code CLI（需要 Node.js）
+brew install node
+npm install -g @anthropic-ai/claude-code
+```
+
+### 2. 配置 iTerm2（关键！）
+
+项目依赖 `tmux -CC` 模式，让 tmux 窗口显示为 iTerm2 原生标签页。需要配置：
+
+1. 打开 iTerm2 → **Settings** (⌘,)
+2. **General → tmux**：
+   - ✅ "Open tmux windows as native tabs in a new window"（tmux 窗口显示为标签页）
+   - ✅ "Automatically bury the tmux client session after connecting"（连接后自动隐藏控制会话）
+
+> 不配置这两项的话，tmux 窗口不会以标签页形式展示，体验会很差。
+
+### 3. 克隆并初始化
+
+```bash
 git clone https://github.com/hengjun-dev/claude-hub.git
 cd claude-hub
 
-# 2. 初始化（注入全局 hooks + 生成语音文件）
+# 一键初始化（注入全局 hooks + 生成语音 + 自动编译托盘 app）
+# 首次编译约 2-3 分钟，Rust 环境不存在会自动安装
 bash scripts/setup.sh
+```
 
-# 3. 添加你的项目（二选一）
-bash scripts/scan-projects.sh ~/Documents/code    # 自动扫描
+### 4. 添加项目
+
+```bash
+# 自动扫描目录下所有 git 仓库
+bash scripts/scan-projects.sh ~/Documents/code
+
 # 或手动编辑
 cp projects.yaml.example projects.yaml
 vim projects.yaml
+```
 
-# 4. 浏览器自动化环境（可选）
+### 5. 配置启动别名（推荐）
+
+```bash
+echo 'alias cc="bash ~/Documents/code/claude-hub/scripts/cc.sh"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+之后只需输入 `cc` 即可一键启动调度中心（自动拉起托盘 app + 启动 Claude）。
+
+### 6. 浏览器自动化（可选）
+
+```bash
 bash scripts/setup-browser.sh
+```
 
-# 5. 启动
-claude
+配置完成后还需在 Chrome 地址栏输入 `chrome://inspect/#remote-debugging`，点击 Enable。
+
+### 7. 启动
+
+```bash
+cc          # 如果配了别名
+# 或
+claude      # 在 claude-hub 目录直接启动
 ```
 
 启动后 Claude 会自动：拉起通知面板 → 显示项目列表 → 检查 tmux → 报告就绪。
 
-## 前置条件
+## 前置条件汇总
 
-- macOS（Apple Silicon / Intel 均可）+ iTerm2
-- [tmux](https://github.com/tmux/tmux) — `brew install tmux`
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
-- Xcode Command Line Tools — `xcode-select --install`
-- Rust 工具链 — `setup.sh` 首次运行时**自动安装**，无需手动操作
+| 依赖 | 用途 | 安装方式 |
+|------|------|---------|
+| macOS + iTerm2 | 终端环境 | 手动安装 |
+| tmux | 多窗口管理 | `brew install tmux` |
+| terminal-notifier | 桌面通知弹窗 | `brew install terminal-notifier` |
+| Node.js | Claude Code CLI + MCP 工具 | `brew install node` |
+| Claude Code CLI | Claude 命令行 | `npm i -g @anthropic-ai/claude-code` |
+| Xcode CLT | 编译 Rust 代码 | `xcode-select --install` |
+| Rust | 编译托盘 app | `setup.sh` **自动安装** |
+
+> Apple Silicon（M1/M2/M3/M4）和 Intel Mac 均支持，托盘 app 在本机编译，无架构兼容问题。
 
 ## 工作原理
 
