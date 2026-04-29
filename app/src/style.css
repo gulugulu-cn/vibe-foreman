@@ -153,6 +153,14 @@ header h1 {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  gap: 2px;
+}
+
+.project-name-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
 }
 
 .project-name {
@@ -160,6 +168,27 @@ header h1 {
   font-size: 13px;
   color: #e0e0e0;
 }
+
+/* git 徽章 */
+.git-pill {
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 0 6px;
+  border-radius: 3px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.git-pill.branch     { background: #1e2a3a; color: #8bb4e0; }
+.git-pill.clean      { background: #1e3a2a; color: #4ade80; }
+.git-pill.dirty      { background: #3a2e1e; color: #fbbf24; }
+.git-pill.ahead      { background: #2a2e3a; color: #fbbf24; }
+.git-pill.behind     { background: #3a1e1e; color: #f87171; }
+.git-pill.no-upstream{ background: #2a2a3a; color: #777; }
+.git-pill.no-git     { background: transparent; color: #555; padding: 0; }
+.project-item.idle .git-pill.branch { color: #5a7a9a; }
 
 .project-item.idle .project-name {
   color: #888;

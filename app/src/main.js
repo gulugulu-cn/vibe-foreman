@@ -208,7 +208,10 @@ function renderProjects() {
       <div class="project-item ${statusClass}" data-name="${p.name}" data-path="${p.path}" data-running="${p.running}">
         <div class="project-dot ${statusClass}"></div>
         <div class="project-info">
-          <span class="project-name">${p.name}</span>
+          <div class="project-name-row">
+            <span class="project-name">${p.name}</span>
+            ${renderGitBadge(p.git)}
+          </div>
           <span class="project-desc">${p.description || ''}</span>
         </div>
         <div class="project-right">
@@ -232,7 +235,37 @@ function renderProjects() {
         showMenu(e, name, path);
       }
     });
+
+    // 右键：无论运行与否都弹操作菜单（打开 Finder/VS Code/再开窗口 等）
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showMenu(e, el.dataset.name, el.dataset.path);
+    });
   });
+}
+
+function renderGitBadge(git) {
+  if (!git || !git.is_git) {
+    return '<span class="git-pill no-git" title="非 git 仓库">无 git</span>';
+  }
+  const isClean = git.changes === 0;
+  const statusClass = isClean ? 'clean' : 'dirty';
+  const statusIcon = isClean ? '✓' : '●';
+  const statusText = isClean ? '干净' : `${git.changes}`;
+  const statusTitle = isClean ? '工作区干净' : `${git.changes} 个未提交变更`;
+
+  let extra = '';
+  if (git.ahead > 0)  extra += `<span class="git-pill ahead"  title="${git.ahead} 个未推送 commit">↑${git.ahead}</span>`;
+  if (git.behind > 0) extra += `<span class="git-pill behind" title="${git.behind} 个落后远端 commit">↓${git.behind}</span>`;
+  if (!git.has_upstream && git.branch) {
+    extra += `<span class="git-pill no-upstream" title="无 upstream">无远端</span>`;
+  }
+
+  return `
+    <span class="git-pill branch" title="当前分支">${git.branch || '?'}</span>
+    <span class="git-pill ${statusClass}" title="${statusTitle}">${statusIcon} ${statusText}</span>
+    ${extra}
+  `;
 }
 
 function showMenu(event, name, path) {

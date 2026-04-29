@@ -4,6 +4,16 @@ use serde::Serialize;
 use std::fs;
 use std::process::Command;
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct GitInfo {
+    pub is_git: bool,
+    pub branch: String,
+    pub changes: u32,
+    pub ahead: u32,
+    pub behind: u32,
+    pub has_upstream: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Project {
     pub name: String,
@@ -11,6 +21,7 @@ pub struct Project {
     pub aliases: Vec<String>,
     pub description: String,
     pub running: bool,
+    pub git: GitInfo,
 }
 
 /// 从 projects.yaml 读取项目列表，并检查 tmux hub 窗口状态
@@ -32,9 +43,51 @@ pub fn load_projects() -> Vec<Project> {
         if p.path.starts_with("~/") {
             p.path = format!("{}/{}", home, &p.path[2..]);
         }
+        p.git = collect_git_info(&p.path);
     }
 
     projects
+}
+
+/// 单次 git 命令获取分支、未提交数、ahead/behind
+fn collect_git_info(path: &str) -> GitInfo {
+    let output = match Command::new("git")
+        .args(["-C", path, "status", "--porcelain=v2", "--branch"])
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return GitInfo::default(),
+    };
+
+    let mut info = GitInfo {
+        is_git: true,
+        ..Default::default()
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut changes: u32 = 0;
+
+    for line in stdout.lines() {
+        if let Some(rest) = line.strip_prefix("# branch.head ") {
+            info.branch = rest.trim().to_string();
+        } else if line.starts_with("# branch.upstream ") {
+            info.has_upstream = true;
+        } else if let Some(rest) = line.strip_prefix("# branch.ab ") {
+            // 格式：+<ahead> -<behind>
+            let mut parts = rest.split_whitespace();
+            if let Some(a) = parts.next() {
+                info.ahead = a.trim_start_matches('+').parse().unwrap_or(0);
+            }
+            if let Some(b) = parts.next() {
+                info.behind = b.trim_start_matches('-').parse().unwrap_or(0);
+            }
+        } else if !line.starts_with('#') && !line.is_empty() {
+            changes += 1;
+        }
+    }
+
+    info.changes = changes;
+    info
 }
 
 /// 获取 tmux hub session 的窗口名列表
@@ -74,6 +127,7 @@ fn parse_yaml(content: &str) -> Vec<Project> {
                 aliases: vec![],
                 description: String::new(),
                 running: false,
+                git: GitInfo::default(),
             });
         } else if let Some(ref mut p) = current {
             if trimmed.starts_with("path:") {
