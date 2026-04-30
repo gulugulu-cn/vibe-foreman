@@ -99,7 +99,7 @@ fn main() {
 
             // 托盘图标（必须显式设置 icon，TrayIconBuilder 不继承 config）
             let _tray = TrayIconBuilder::new()
-                .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?)
+                .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?)
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .tooltip("Claude Hub")

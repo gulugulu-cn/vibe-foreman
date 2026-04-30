@@ -15,3 +15,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 notify = "7"
 chrono = "0.4"
+
+# release 模式精简二进制 + 去除调试符号，配合 .cargo/config.toml 的路径重映射保护用户名隐私
+[profile.release]
+strip = "symbols"
+opt-level = 3
+codegen-units = 1
