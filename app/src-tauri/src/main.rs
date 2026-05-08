@@ -2,7 +2,10 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod deps;
+mod init;
 mod projects;
+mod term;
 mod usage;
 mod watcher;
 
@@ -66,6 +69,32 @@ fn open_project(name: String, path: String, mode: String) {
     projects::open_in_tmux(&name, &path, &mode);
 }
 
+#[tauri::command]
+fn scan_projects(base: Option<String>) -> Result<usize, String> {
+    projects::scan_and_save(base)
+}
+
+#[tauri::command]
+fn reveal_data_dir() {
+    let dir = init::app_data_dir();
+    let _ = std::process::Command::new("open").arg(dir).spawn();
+}
+
+#[tauri::command]
+fn check_dependencies() -> Vec<deps::DepStatus> {
+    deps::check_all()
+}
+
+#[tauri::command]
+fn get_terminal_info() -> term::TerminalInfo {
+    term::detect_info()
+}
+
+#[tauri::command]
+fn hub_server_legacy() -> bool {
+    term::hub_server_owned_by_app()
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
@@ -77,7 +106,12 @@ fn main() {
             get_projects,
             get_usage_stats,
             focus_project,
-            open_project
+            open_project,
+            scan_projects,
+            reveal_data_dir,
+            check_dependencies,
+            get_terminal_info,
+            hub_server_legacy
         ])
         .setup(|app| {
             // 窗口关闭 → 隐藏
@@ -121,6 +155,9 @@ fn main() {
                     }
                 })
                 .build(app)?;
+
+            // 自动初始化用户数据目录（首次启动 / 升级时同步嵌入的 scripts/sounds）
+            init::run(app.handle());
 
             // 文件监听
             watcher::start_watching(app.handle().clone());

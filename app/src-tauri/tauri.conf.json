@@ -33,6 +33,10 @@
     ],
     "category": "DeveloperTool",
     "shortDescription": "Claude Hub 调度中心",
-    "longDescription": "本地开发调度中心：tmux 项目窗口管理 + Claude 通知聚合 + 用量统计"
+    "longDescription": "本地开发调度中心：tmux 项目窗口管理 + Claude 通知聚合 + 用量统计",
+    "resources": {
+      "../../scripts": "scripts",
+      "../../sounds": "sounds"
+    }
   }
 }

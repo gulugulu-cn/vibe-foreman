@@ -17,10 +17,14 @@
       <span class="status-badge" id="globalStatus">就绪</span>
     </header>
 
+    <!-- 依赖检查（仅当有缺失才显示） -->
+    <section class="deps-panel" id="depsPanel" style="display:none"></section>
+
     <!-- 项目视图 -->
     <div id="projectsView" class="view active">
       <div class="search-box">
         <input type="text" id="searchInput" placeholder="搜索项目..." autocomplete="off" spellcheck="false">
+        <button class="icon-btn" title="扫描 ~/Documents/code 下的 git 项目" onclick="scanProjects()">⟳ 扫描</button>
       </div>
 
       <section class="projects" id="projectList">

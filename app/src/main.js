@@ -19,6 +19,9 @@ async function init() {
     handleEvent(event.payload);
   });
 
+  // 启动时跑一次依赖检查
+  refreshDeps();
+
   // 加载项目列表
   await refreshProjects();
 
@@ -169,7 +172,16 @@ function renderProjects() {
   const list = document.getElementById('projectList');
 
   if (state.projects.length === 0) {
-    list.innerHTML = '<div class="empty">没有项目，运行 scripts/scan-projects.sh</div>';
+    list.innerHTML = `
+      <div class="empty-cta">
+        <div class="empty-title">还没添加项目</div>
+        <div class="empty-hint">点击下方按钮自动扫描 <code>~/Documents/code</code> 下的 git 仓库</div>
+        <div class="empty-actions">
+          <button class="btn-primary" onclick="scanProjects()">扫描项目</button>
+          <button class="btn-ghost" onclick="revealDataDir()">打开配置目录</button>
+        </div>
+      </div>
+    `;
     return;
   }
 
@@ -364,9 +376,142 @@ function updateGlobalStatus() {
   }
 }
 
+async function refreshDeps() {
+  try {
+    const [list, terminal, legacy] = await Promise.all([
+      invoke('check_dependencies'),
+      invoke('get_terminal_info'),
+      invoke('hub_server_legacy'),
+    ]);
+    state.deps = list;
+    state.terminal = terminal;
+    state.legacyServer = legacy;
+    renderDeps();
+  } catch (e) {}
+}
+
+function renderDeps() {
+  const panel = document.getElementById('depsPanel');
+  if (!panel || !state.deps) return;
+  const missing = state.deps.filter(d => !d.installed);
+  const term = state.terminal || {};
+  const legacy = !!state.legacyServer;
+  const termWarn = term && term.supported === false;
+
+  // 全部 OK 且无遗留 server → 隐藏面板
+  if (missing.length === 0 && !termWarn && !legacy) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  const requiredMissing = missing.filter(d => d.required);
+  const optionalMissing = missing.filter(d => !d.required);
+
+  let title;
+  if (legacy) title = '⚠️ 检测到旧版 tmux server';
+  else if (requiredMissing.length > 0) title = '⚠️ 缺少必需依赖';
+  else if (termWarn) title = '⚠️ 终端不受支持';
+  else title = '可选依赖未装';
+
+  let body = '';
+
+  // 旧版 server 提示
+  if (legacy) {
+    body += `
+      <div class="dep-row required">
+        <div class="dep-info">
+          <span class="dep-label">现有 hub server 由 .app 创建（无法读 Keychain 登录态）</span>
+        </div>
+        <code class="dep-cmd" title="点击复制" onclick="copyText(this, 'tmux kill-server')">tmux kill-server</code>
+      </div>
+    `;
+  }
+
+  // 终端不支持提示
+  if (termWarn) {
+    body += `
+      <div class="dep-row required">
+        <div class="dep-info">
+          <span class="dep-label">检测到终端 ${term.label || ''}，第一版仅支持 iTerm / Terminal.app</span>
+        </div>
+        <code class="dep-cmd" title="点击复制" onclick="copyText(this, 'brew install --cask iterm2')">brew install --cask iterm2</code>
+      </div>
+    `;
+  }
+
+  // 缺失依赖
+  for (const d of [...requiredMissing, ...optionalMissing]) {
+    body += `
+      <div class="dep-row ${d.required ? 'required' : 'optional'}">
+        <div class="dep-info">
+          <span class="dep-label">${d.label}</span>
+          <span class="dep-tag">${d.required ? '必需' : '可选'}</span>
+        </div>
+        <code class="dep-cmd" title="点击复制" onclick="copyText(this, '${escapeAttr(d.install_cmd)}')">${d.install_cmd}</code>
+      </div>
+    `;
+  }
+
+  panel.style.display = '';
+  panel.innerHTML = `
+    <div class="deps-header">
+      <span class="deps-title">${title}</span>
+      <button class="deps-recheck" onclick="refreshDeps()" title="重新检查">⟳</button>
+    </div>
+    ${body}
+    <div class="deps-footer">终端：<b>${term.label || '?'}</b></div>
+  `;
+}
+
+function escapeAttr(s) {
+  return String(s).replace(/'/g, "\\'");
+}
+
+async function copyText(el, text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const orig = el.textContent;
+    el.textContent = '已复制 ✓';
+    el.classList.add('copied');
+    setTimeout(() => {
+      el.textContent = orig;
+      el.classList.remove('copied');
+    }, 1200);
+  } catch (e) {}
+}
+
+async function scanProjects() {
+  try {
+    const added = await invoke('scan_projects', { base: null });
+    await refreshProjects();
+    const msg = added > 0 ? `扫描完成，新增 ${added} 个项目` : '已是最新，未发现新项目';
+    flashStatus(msg);
+  } catch (e) {
+    flashStatus('扫描失败：' + e, true);
+  }
+}
+
+async function revealDataDir() {
+  try { await invoke('reveal_data_dir'); } catch (e) {}
+}
+
+// 临时在 globalStatus 闪一条提示
+function flashStatus(text, error = false) {
+  const badge = document.getElementById('globalStatus');
+  const prevText = badge.textContent;
+  const prevClass = badge.className;
+  badge.textContent = text;
+  badge.className = 'status-badge ' + (error ? 'attention' : 'busy');
+  setTimeout(() => updateGlobalStatus(), 2400);
+}
+
 // 暴露给 HTML onclick
 window.menuAction = menuAction;
 window.switchTab = switchTab;
 window.loadUsage = loadUsage;
+window.scanProjects = scanProjects;
+window.revealDataDir = revealDataDir;
+window.refreshDeps = refreshDeps;
+window.copyText = copyText;
 
 init();

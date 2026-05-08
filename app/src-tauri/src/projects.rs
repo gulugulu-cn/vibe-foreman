@@ -1,7 +1,10 @@
 // 读取 projects.yaml + 检查 tmux 窗口状态
 
+use crate::init;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -26,8 +29,8 @@ pub struct Project {
 
 /// 从 projects.yaml 读取项目列表，并检查 tmux hub 窗口状态
 pub fn load_projects() -> Vec<Project> {
+    let yaml_path = init::yaml_path();
     let home = std::env::var("HOME").unwrap_or_default();
-    let yaml_path = format!("{}/Documents/code/claude-hub/projects.yaml", home);
 
     let content = match fs::read_to_string(&yaml_path) {
         Ok(c) => c,
@@ -160,10 +163,36 @@ fn parse_yaml(content: &str) -> Vec<Project> {
 
 /// 在 tmux hub 中打开项目
 pub fn open_in_tmux(name: &str, path: &str, mode: &str) {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let menu_script = format!("{}/Documents/code/claude-hub/scripts/project-menu.sh", home);
+    use crate::term;
 
-    // 确保 hub session 存在
+    // finder / vscode：不需要 tmux
+    if mode == "finder" {
+        Command::new("open").arg(path).status().ok();
+        return;
+    }
+    if mode == "vscode" {
+        Command::new("code").arg(path).status().ok();
+        return;
+    }
+
+    let scripts_dir = init::scripts_dir();
+    let menu_script = scripts_dir
+        .join("project-menu.sh")
+        .to_string_lossy()
+        .to_string();
+
+    // 拼接要在 tmux window 内执行的命令（None = 不跑命令，只开 shell）
+    let inner_cmd: Option<String> = match mode {
+        "claude" => Some(format!("cd '{}' && claude", path)),
+        "claude-skip" => Some(format!(
+            "cd '{}' && claude --dangerously-skip-permissions",
+            path
+        )),
+        "terminal" => None,
+        "menu" => Some(format!("bash '{}' '{}' '{}'", menu_script, name, path)),
+        _ => return,
+    };
+
     let hub_exists = Command::new("tmux")
         .args(["has-session", "-t", "hub"])
         .status()
@@ -171,86 +200,115 @@ pub fn open_in_tmux(name: &str, path: &str, mode: &str) {
         .unwrap_or(false);
 
     if !hub_exists {
-        Command::new("tmux")
-            .args(["new-session", "-d", "-s", "hub", "-n", "_init"])
-            .status()
-            .ok();
+        // 关键：第一次创建 hub session 必须由终端跑，
+        // 这样 tmux server 父进程是终端，claude 子进程能复用终端的 Keychain ACL。
+        term::create_hub_session(name, path, inner_cmd.as_deref());
+        return;
     }
 
-    let need_cleanup = !hub_exists; // 新建 session 时需要清理 _init
-
-    match mode {
-        "claude" => {
-            let cmd = format!("cd '{}' && claude", path);
-            Command::new("tmux")
-                .args(["new-window", "-t", "hub", "-n", name, "-c", path, &cmd])
-                .status()
-                .ok();
-        }
-        "claude-skip" => {
-            let cmd = format!("cd '{}' && claude --dangerously-skip-permissions", path);
-            Command::new("tmux")
-                .args(["new-window", "-t", "hub", "-n", name, "-c", path, &cmd])
-                .status()
-                .ok();
-        }
-        "terminal" => {
-            Command::new("tmux")
-                .args(["new-window", "-t", "hub", "-n", name, "-c", path])
-                .status()
-                .ok();
-        }
-        "finder" => {
-            Command::new("open").arg(path).status().ok();
-            return; // 不需要 tmux
-        }
-        "vscode" => {
-            Command::new("code").arg(path).status().ok();
-            return; // 不需要 tmux
-        }
-        "menu" => {
-            let cmd = format!("bash '{}' '{}' '{}'", menu_script, name, path);
-            Command::new("tmux")
-                .args(["new-window", "-t", "hub", "-n", name, "-c", path, &cmd])
-                .status()
-                .ok();
-        }
-        _ => return,
+    // session 已存在 → client 操作（.app 直接跑），不影响 server 进程链
+    let mut args: Vec<&str> = vec!["new-window", "-t", "hub", "-n", name, "-c", path];
+    let cmd_owned;
+    if let Some(c) = inner_cmd {
+        cmd_owned = c;
+        args.push(&cmd_owned);
     }
+    Command::new("tmux").args(&args).status().ok();
 
-    // 清理 _init 窗口（新建 session 时会产生）
-    if need_cleanup {
-        Command::new("tmux")
-            .args(["kill-window", "-t", "hub:_init"])
-            .status()
-            .ok();
-    }
-
-    // 确保 iTerm2 连接到 hub
-    ensure_client_attached();
-}
-
-fn ensure_client_attached() {
+    // 终端是否已连到 hub？没连就让终端 attach
     let has_client = Command::new("tmux")
         .args(["list-clients", "-t", "hub"])
         .output()
         .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
         .unwrap_or(false);
-
     if !has_client {
-        Command::new("osascript")
-            .args(["-e", r#"
-                tell application "iTerm2"
-                    tell current window
-                        create tab with default profile
-                        delay 0.5
-                        tell current session of current tab
-                            write text "tmux -CC attach -t hub"
-                        end tell
-                    end tell
-                end tell
-            "#])
-            .status()
-            .ok();
+        term::attach_existing_hub();
     }
 }
+
+/// 扫描指定目录下的 git 仓库，把没出现在 yaml 里的项目追加进去
+/// base 为 None 时默认 ~/Documents/code
+pub fn scan_and_save(base: Option<String>) -> Result<usize, String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let base_dir = base
+        .map(|s| {
+            if s.starts_with("~/") {
+                format!("{}/{}", home, &s[2..])
+            } else {
+                s
+            }
+        })
+        .unwrap_or_else(|| format!("{}/Documents/code", home));
+
+    let mut found: Vec<(String, String)> = Vec::new();
+    walk_for_git(&PathBuf::from(&base_dir), 0, &mut found);
+
+    let yaml_path = init::yaml_path();
+    let existing = fs::read_to_string(&yaml_path).unwrap_or_default();
+
+    // 收集已有项目的 path，避免重复添加
+    let mut existing_paths: HashSet<String> = HashSet::new();
+    for line in existing.lines() {
+        let t = line.trim_start();
+        if let Some(rest) = t.strip_prefix("path:") {
+            existing_paths.insert(rest.trim().to_string());
+        }
+    }
+
+    let mut added = 0;
+    let mut additions = String::new();
+    for (name, path) in &found {
+        if existing_paths.contains(path) {
+            continue;
+        }
+        additions.push_str(&format!(
+            "\n  - name: {}\n    aliases: []\n    path: {}\n    description: \"\"\n    tags: []\n",
+            name, path
+        ));
+        added += 1;
+    }
+
+    if added > 0 {
+        let mut content = if existing.trim().is_empty() {
+            "# Claude Hub 项目清单\n\nprojects:\n".to_string()
+        } else if !existing.contains("projects:") {
+            format!("{}\nprojects:\n", existing.trim_end())
+        } else {
+            existing
+        };
+        content.push_str(&additions);
+        fs::write(&yaml_path, content).map_err(|e| e.to_string())?;
+    }
+
+    Ok(added)
+}
+
+fn walk_for_git(dir: &Path, depth: u8, out: &mut Vec<(String, String)>) {
+    if depth > 3 || !dir.is_dir() {
+        return;
+    }
+    if dir.join(".git").exists() {
+        if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
+            out.push((name.to_string(), dir.to_string_lossy().to_string()));
+        }
+        return;
+    }
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if !p.is_dir() {
+            continue;
+        }
+        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name.starts_with('.')
+            || matches!(name, "node_modules" | "target" | "dist" | "build" | "vendor")
+        {
+            continue;
+        }
+        walk_for_git(&p, depth + 1, out);
+    }
+}
+

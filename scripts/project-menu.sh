@@ -15,10 +15,11 @@ NC='\033[0m'
 
 cd "$DIR" 2>/dev/null || exit 1
 
-# 注入 hub 环境
-export PATH="$HOME/Documents/code/claude-hub/scripts:$PATH"
-alias hub-notify="bash $HOME/Documents/code/claude-hub/scripts/hub-notify.sh"
-alias hub-run="bash $HOME/Documents/code/claude-hub/scripts/hub-run.sh"
+# 自定位 hub scripts 目录（支持任意安装位置）
+HUB_SCRIPTS_DIR="${HUB_SCRIPTS_DIR:-$(cd "$(dirname "$0")" && pwd)}"
+export PATH="$HUB_SCRIPTS_DIR:$PATH"
+alias hub-notify="bash $HUB_SCRIPTS_DIR/hub-notify.sh"
+alias hub-run="bash $HUB_SCRIPTS_DIR/hub-run.sh"
 
 # 显示项目信息
 echo ""

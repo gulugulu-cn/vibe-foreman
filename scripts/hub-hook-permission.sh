@@ -11,7 +11,9 @@ if [ -z "$NAME" ]; then
 fi
 NAME="${NAME:-$(basename "$PWD" 2>/dev/null)}"
 
-HUB_DIR="$HOME/Documents/code/claude-hub"
+# 自定位：从脚本所在目录推断 HUB_DIR，支持任意安装位置
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+HUB_DIR="${HUB_DIR:-$(dirname "$SCRIPT_DIR")}"
 SOUNDS_DIR="$HUB_DIR/sounds"
 SIGNAL_DIR="/tmp/hub-signals"
 EVENTS_DIR="$SIGNAL_DIR/events"

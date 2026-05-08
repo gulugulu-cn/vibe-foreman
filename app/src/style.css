@@ -75,6 +75,79 @@ header h1 {
   color: #e0e0e0;
 }
 
+/* 依赖检查面板（仅缺失时显示） */
+.deps-panel {
+  background: #2a1f1a;
+  border: 1px solid #4a2a1a;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.deps-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.deps-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #f9a14a;
+}
+.deps-recheck {
+  background: transparent;
+  border: 1px solid #4a3a2a;
+  color: #888;
+  font-size: 11px;
+  width: 22px; height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.deps-recheck:hover { color: #f9a14a; border-color: #6a4a2a; }
+.dep-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 11px;
+}
+.dep-row.optional .dep-tag { background: #2a2a4a; color: #777; }
+.dep-info { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.dep-label { color: #ccc; }
+.dep-tag {
+  background: #4a2a1a;
+  color: #f9a14a;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.dep-cmd {
+  background: #16162a;
+  color: #8bb4e0;
+  padding: 3px 7px;
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid #2a2a4a;
+  transition: all 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+.dep-cmd:hover { background: #1e2a3a; border-color: #3a3a5a; color: #b8d4f0; }
+.dep-cmd.copied { background: #1e3a2a; color: #4ade80; border-color: #2e5a3e; }
+.deps-footer {
+  margin-top: 8px;
+  font-size: 10px;
+  color: #777;
+  text-align: right;
+}
+.deps-footer b { color: #aaa; font-weight: 500; }
+
 /* Views */
 .view {
   flex: 1;
@@ -86,10 +159,14 @@ header h1 {
 /* 搜索框 */
 .search-box {
   margin-bottom: 8px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
 }
 
 .search-box input {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 6px 10px;
   border: 1px solid #2a2a4a;
   border-radius: 6px;
@@ -107,6 +184,63 @@ header h1 {
 .search-box input:focus {
   border-color: #4a4a7a;
 }
+
+.icon-btn {
+  border: 1px solid #2a2a4a;
+  background: #16162a;
+  color: #aaa;
+  font-size: 11px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.icon-btn:hover { background: #2a2a4a; color: #e0e0e0; border-color: #3a3a5a; }
+.icon-btn:active { transform: scale(0.97); }
+
+/* 空状态引导 */
+.empty-cta {
+  padding: 28px 16px;
+  text-align: center;
+}
+.empty-title {
+  font-size: 14px;
+  color: #aaa;
+  margin-bottom: 8px;
+}
+.empty-hint {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+.empty-hint code {
+  background: #16162a;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: ui-monospace, monospace;
+  color: #8bb4e0;
+  font-size: 11px;
+}
+.empty-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.btn-primary, .btn-ghost {
+  border: none;
+  font-size: 12px;
+  padding: 7px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-primary { background: #3b82f6; color: #fff; }
+.btn-primary:hover { background: #2563eb; }
+.btn-ghost { background: #2a2a4a; color: #aaa; }
+.btn-ghost:hover { background: #3a3a5a; color: #e0e0e0; }
 
 /* 项目列表 */
 .projects {
