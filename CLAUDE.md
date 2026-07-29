@@ -76,10 +76,16 @@ done
 
 每次新会话启动时，**立即自动执行**以下步骤（不询问用户、不等待确认）：
 
-1. **启动通知面板** — 检查 `pgrep -f "claude-hub"` 是否已运行，未运行则后台启动：
+1. **启动灵动岛** — 用 `pgrep -x ClaudeHub` 判断是否已运行，未运行则启动：
    ```bash
-   ~/Documents/code/claude-hub/app/src-tauri/target/release/claude-hub &>/dev/null &
+   open -a "Claude Hub"
    ```
+   没装就先编译安装：`bash ~/Documents/code/claude-hub/scripts/build-swift-app.sh`
+
+   **必须用 `pgrep -x ClaudeHub`，不能用 `pgrep -f "Claude Hub.app"`。**
+   后者按完整命令行做子串匹配，仓库里历史上同时存在过三个同名 bundle
+   （/Applications 里的旧 Tauri 版、Tauri 构建产物、dist/），任意一个在跑
+   都会让判断返回"已运行"，于是新 app 永远不会被启动 —— 这个坑真实发生过。
 2. **显示项目列表** — `bash scripts/welcome.sh`
 3. **检查 tmux hub** — `tmux has-session -t hub 2>/dev/null`，报告状态
 4. **报告就绪** — 一句话告知用户调度中心已就绪

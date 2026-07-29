@@ -5,6 +5,14 @@ memory/*.md
 *.log
 node_modules/
 sounds/
+
+# 本机的项目清单，各人不同
 projects.yaml
-app/src-tauri/target/
-app/node_modules/
+
+# SwiftPM 构建产物（约 1 GB）。release.sh 的暂存 .app 也在里面。
+HubKit/.build/
+.swiftpm/
+
+# 发布包。dmg 走 GitHub Release，不进仓库。
+release/
+dist/

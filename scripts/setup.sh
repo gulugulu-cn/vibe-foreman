@@ -29,66 +29,14 @@ if [ ! -f "$SETTINGS_FILE" ]; then
   echo -e "${YELLOW}创建了 $SETTINGS_FILE${NC}"
 fi
 
-# 注入 hooks（用 python3 安全修改 JSON）
-python3 << PYTHON
-import json
-
-settings_file = "$SETTINGS_FILE"
-hub_dir = "$HUB_DIR"
-
-with open(settings_file, 'r') as f:
-    settings = json.load(f)
-
-if "hooks" not in settings:
-    settings["hooks"] = {}
-
-hooks_to_add = {
-    "Stop": {
-        "script": "hub-hook-stop.sh",
-        "async": True
-    },
-    "Notification": {
-        "script": "hub-hook-permission.sh",
-        "async": True
-    }
-}
-
-changed = False
-for event, config in hooks_to_add.items():
-    hook_entry = {
-        "hooks": [{
-            "type": "command",
-            "command": f"bash {hub_dir}/scripts/{config['script']}",
-            "async": config["async"]
-        }]
-    }
-
-    if event not in settings["hooks"]:
-        settings["hooks"][event] = []
-
-    # 检查是否已存在
-    existing = [h for h in settings["hooks"][event]
-                if any(config["script"] in hh.get("command", "")
-                       for hh in h.get("hooks", []))]
-
-    if not existing:
-        settings["hooks"][event].append(hook_entry)
-        changed = True
-        print(f"  + {event} hook ({config['script']})")
-    else:
-        print(f"  ✓ {event} hook 已存在")
-
-if changed:
-    with open(settings_file, 'w') as f:
-        json.dump(settings, f, indent=2, ensure_ascii=False)
-    print("  配置已更新")
-else:
-    print("  无需更新")
-PYTHON
-
-if [ $? -eq 0 ]; then
-  echo -e "${GREEN}✓ Hooks 配置完成${NC}"
-else
+# 注入 hooks
+#
+# 这里**不再自己写 settings.json**，一律转交 setup-swift-hooks.sh。
+#
+# 原因：这个脚本以前会注入 hub-hook-stop.sh / hub-hook-permission.sh 那套 bash hook。
+# 它们和现在的 hubctl 是互斥的两套实现，而且这个脚本跑在后面就会把 hubctl 的配置
+# 覆盖回去 —— 「装完 hook 又不生效」的经典来源。配置只允许有一个出口。
+if ! bash "$HUB_DIR/scripts/setup-swift-hooks.sh"; then
   echo -e "${RED}✗ hook 配置失败${NC}"
   exit 1
 fi
@@ -150,7 +98,7 @@ for cmd in tmux say osascript terminal-notifier; do
   fi
 done
 
-for script in hub-hook-stop.sh hub-hook-permission.sh hub-run.sh hub-notify.sh; do
+for script in hub-run.sh hub-notify.sh project-menu.sh welcome.sh; do
   if [ -f "$HUB_DIR/scripts/$script" ]; then
     echo -e "${GREEN}✓ $script${NC}"
   else
@@ -161,18 +109,19 @@ done
 echo ""
 echo -e "${GREEN}${BOLD}初始化完成！${NC}"
 echo ""
-echo -e "两个全局 hook 已配置："
-echo -e "  ${CYAN}Stop${NC}         → Claude 做完事通知你（桌面弹窗 + 语音）"
-echo -e "  ${CYAN}Notification${NC} → Claude 需要授权时通知你"
+echo -e "全局 hook 已配置："
+echo -e "  ${CYAN}Stop${NC}         → 灵动岛闯入提示 + 可点击跳转的通知"
+echo -e "  ${CYAN}Notification${NC} → Claude 需要输入/授权时提示"
+echo -e "  ${CYAN}SessionEnd${NC}   → 会话结束时清理岛上的条目"
+echo -e "  ${CYAN}PreToolUse${NC}   → 高风险操作在岛上审批"
 echo ""
 echo -e "${YELLOW}子窗口的 Claude 需要重启才能生效。${NC}"
 
-# 编译托盘 app（如果还没编译）
-APP_BIN="$HUB_DIR/app/src-tauri/target/release/claude-hub"
-if [ ! -f "$APP_BIN" ]; then
+# 编译并安装 app
+if [ ! -d "/Applications/Claude Hub.app" ]; then
   echo ""
-  echo -e "${YELLOW}托盘 app 尚未编译，正在编译（首次需要几分钟）...${NC}"
-  bash "$HUB_DIR/scripts/build-app.sh"
+  echo -e "${YELLOW}Claude Hub.app 尚未安装，正在编译（首次需要几分钟）...${NC}"
+  bash "$HUB_DIR/scripts/build-swift-app.sh"
 else
-  echo -e "${GREEN}✓ 托盘 app 已编译${NC}"
+  echo -e "${GREEN}✓ Claude Hub.app 已安装${NC}"
 fi

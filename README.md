@@ -4,9 +4,11 @@ Claude Code 本地开发调度中心。用一个 Claude 窗口管理所有项目
 
 ## 功能
 
+- **灵动岛** — MacBook 刘海变成 agent 控制中心，Liquid Glass + 状态驱动的像素小人
+- **实时会话监控** — 每个 Claude 会话的 `busy / waiting / shell / idle` 状态一眼可见
+- **精准跳转** — 点通知或点会话，直接跳到那个会话所在的终端 tab（不是"跳到 iTerm 然后自己找"）
+- **高风险审批** — 不可逆操作（`rm -rf /`、force push 到 main 等）在岛上拦截确认
 - **tmux 多项目管理** — 每个项目一个 tmux 窗口，iTerm2 标签页体验
-- **全局通知** — 任何 Claude 做完事 → 桌面弹窗 + 语音提醒（零配置）
-- **权限通知** — 任何 Claude 等授权 → 立即提醒你去操作
 - **用量统计** — 按项目查看 token 消耗、会话数、模型分布
 - **项目发现** — 扫描目录自动生成项目清单
 - **浏览器自动化** — Claude in Chrome + DevTools 双引擎协同
@@ -143,47 +145,92 @@ Hub 是你和所有项目 Claude 之间的调度层：
 - 你说"在 xxx 跑构建" → Hub 发送命令到对应窗口
 - 任何窗口的 Claude 做完事 → 你收到通知
 
-## 通知机制（核心功能）
+## 灵动岛（Claude Hub.app）
 
-所有 Claude 实例做完事或等授权时，**自动通知你**。零配置，全局生效。
+原生 SwiftUI 应用，把 MacBook 刘海变成 AI agent 的控制中心。要求 **macOS 26+**，自己编译还需要 **Xcode 26**。
 
-### 工作原理
-
-Claude Code 内置 Hook 机制，在特定事件发生时自动执行 shell 脚本。`setup.sh` 会把两个 hook 注入到全局配置 `~/.claude/settings.json`，所有 Claude 实例共享，无需在每个项目单独配置。
-
-### 完整链路
-
-```
-Claude 完成一轮回复
-  → 触发 Stop hook（hub-hook-stop.sh）
-    → 1. 桌面弹窗通知（点击可跳转到 iTerm2）
-    → 2. 语音播报（随机："搞定了，来看看" / "干完了，等你验收" 等 5 种）
-    → 3. 写事件 JSON 到 /tmp/hub-signals/events/
-    → 4. 发 tmux 信号（唤醒 Hub 中等待的进程）
-         ↓
-    Tauri 托盘 app 监听到事件文件
-      → 面板实时更新事件列表
-      → 系统通知
-
-Claude 需要用户授权
-  → 触发 Notification hook（hub-hook-permission.sh）
-    → 同上链路，但提示语变成"需要你授权" / "在等你点确认"等
+```bash
+bash scripts/build-swift-app.sh      # 编译 + 签名 + 安装到 /Applications
+bash scripts/setup-swift-hooks.sh    # 安装 hook 到 ~/.claude/settings.json
+open -a "Claude Hub"
 ```
 
-### 通知渠道
+### 打发布包
 
-| 渠道 | 说明 | 依赖 |
+```bash
+bash scripts/release.sh              # 跑测试 → universal 编译 → 签名 → dmg
+```
+
+产物在 `release/Claude-Hub-<版本>.dmg`，arm64 + x86_64 双架构。
+和日常构建的分工：`build-swift-app.sh` 只编当前架构、装进 `/Applications`，几秒钟；
+`release.sh` 打完整发布包，**不碰你正在用的那个实例**。
+
+包是**自签名、未公证**的。自己的机器没问题，别人下载后首次打开会被 Gatekeeper 拦，
+需要右键 → 打开，或者 `xattr -dr com.apple.quarantine "/Applications/Claude Hub.app"`。
+要做到双击即用得有 Apple Developer Program 的 Developer ID 证书 + 公证。
+
+**同一个 bundle identifier 只允许对应 /Applications 里那一个 .app。** 留第二份副本
+（哪怕只是"调试用"）会让 LaunchServices 注册出多条记录，通知授权和 TCC 授权互相抢，
+存活判断也会误匹配 —— 构建脚本因此装完就删掉暂存副本。
+
+### 五种形态
+
+| 形态 | 触发 | 内容 |
 |------|------|------|
-| 桌面弹窗 | macOS 通知中心，点击跳转 iTerm2 | terminal-notifier（推荐），缺失时降级到 osascript |
-| 语音播报 | 随机语音，做完/授权各 5 种话术 | say + afplay（macOS 内置） |
-| 托盘面板 | 实时事件列表，点击项目可直接跳转 | Tauri app（文件系统监听 /tmp/hub-signals/events/） |
-| tmux 信号 | 程序化等待任务完成 | tmux wait-for（Hub 内部使用） |
+| **折叠** | 常驻 | 贴刘海挤出一条 14pt 的"下唇"：会话数 + 状态点阵 + 待办徽章 |
+| **悬停** | 鼠标靠近 | 每个会话一个 32pt 像素小人，状态驱动动作 + 一行统计 |
+| **展开** | 点击 | 完整会话列表，点一行精准跳回对应终端 tab |
+| **闯入** | 会话完成 / 需要输入 | 主动膨胀提示，2–2.6 秒后回落 |
+| **审批** | 拦截到不可逆操作 | 命令内容 + 拒绝/按住确认，**不会自动消失** |
 
-### 为什么零配置
+无刘海的外接显示器上，折叠态自动退化为屏幕顶部的悬浮胶囊。
 
-- Hook 配置在 `~/.claude/settings.json`，对所有 Claude 实例全局生效
-- `setup.sh` 一次注入，永久生效，不需要在每个项目重新配置
-- 语音文件在 `setup.sh` 时一次性生成到 `sounds/` 目录
+### 像素小人
+
+每个运行中的会话配一个，动作由状态驱动：`busy` 敲键盘、`waiting` 抬头挥手、`shell` 敲命令行、`idle` 呼吸 + 偶发打哈欠（按 sessionId 错峰，避免所有人同时打哈欠）。
+
+全部小人共用一个 12fps 主时钟，折叠态 / 窗口被遮挡 / 锁屏 / 显示器休眠时整体冻结。
+
+## 实时会话监控
+
+状态来自 Claude Code 自己维护的 `~/.claude/sessions/<PID>.json`，是**权威数据**而非推断：
+
+| 状态 | 含义 |
+|------|------|
+| `busy` | 正在干活 |
+| `waiting` | 等你输入或授权（附带 `waitingFor` 说明原因） |
+| `shell` | 正在跑 shell 命令 |
+| `idle` | 空闲 |
+
+同时区分 `interactive`（前台会话）和 `bg`（后台任务）。
+
+## 精准跳转
+
+点通知、点岛上的会话行，都会跳到**那个会话所在的具体终端 tab**。
+
+实现方式是从 iTerm 的 `jobPid` 向上遍历进程树，第一个存在 `sessions/<PID>.json` 的祖先就是该 tab 承载的会话 —— 全程只用整数 PID 和 UUID，不做任何字符串匹配。tmux `-CC` 会话和非 tmux 的原生会话用同一套算法。
+
+`kind: bg` 的会话跑在 daemon 下、不在任何终端里，改为定位到显示它的 `claude agents` 查看器 tab。
+
+## 高风险操作审批
+
+`PreToolUse` hook 会拦截**不可逆**操作，在岛上弹出审批：
+
+| 级别 | 例子 | 默认行为 |
+|------|------|----------|
+| 普通 | `npm install`、`git commit` | 直接放行 |
+| 危险 | `rm -rf node_modules`、`git reset --hard`、`sudo` | 只记进审批日志，不拦截 |
+| 不可逆 | `rm -rf /`、force push 到 main、`DROP DATABASE` | **拦截**，需按住 900ms 确认 |
+
+默认只拦最后一档，把日常摩擦压到接近零。想更严格可以在设置里把「危险」一档也打开 —— 建议先看一周审批日志再决定。
+
+防误点做了六重保护：按钮间距 24pt 不融合、出现后 700ms 时间锁、指针进入 120ms 冷却、不可逆操作必须长按、**默认焦点在拒绝**（`⏎` 和 `⎋` 都是拒绝，允许必须 `⌘⏎`）、60 秒超时自动拒绝。
+
+## 主窗口
+
+托盘菜单 → 打开主窗口。五个分区：会话 / 项目 / 用量 / 审批日志 / 设置。
+
+和岛的分工：**岛是一瞥**（零点击获取状态），**主窗口是深挖**（用量趋势、项目管理、审批历史）。两者共享同一套数据和组件。
 
 ## 项目管理
 
@@ -198,23 +245,19 @@ bash scripts/add-project.sh my-app ~/code/my-app app 前端
 bash scripts/welcome.sh
 ```
 
-## 通知面板（Tauri App）
+主窗口的「项目」页也能直接扫描、搜索、按 8 种模式启动（Claude Code / 跳过权限 / 纯终端 / 继续上次会话 / 选择历史会话 / Finder / VS Code）。
 
-菜单栏托盘应用，实时展示项目状态和通知。
-
-- 左键点击托盘图标 → 显示面板
-- 关闭窗口 × → 隐藏到托盘（不退出）
-- 右键托盘 → 退出
-- 支持项目搜索（按名称/描述/路径模糊匹配）
-- **用量统计** — 按项目查看 token 消耗、会话数、模型分布
-
-`setup.sh` 首次运行会自动编译 release 版本（约 2-3 分钟），之后每次启动直接运行二进制，秒开。编译产物是本机架构（ARM/x86），不会提交到 git。
-
-手动编译/重新编译：
+## 开发
 
 ```bash
-bash scripts/build-app.sh
+cd HubKit
+swift build          # 编译
+swift test           # 87 个测试
+swift run hubprobe list      # 命令行查看会话与终端绑定
+swift run hubprobe jump 3    # 跳到第 3 个会话
 ```
+
+工程结构见 `HubKit/`，实测踩过的坑记在 `HubKit/NOTES.md`。
 
 ## 浏览器自动化
 
@@ -265,16 +308,29 @@ Not authorized to send Apple events to iTerm2
 2. 找到 Terminal（或 iTerm2），勾选允许控制
 3. 手动验证：`osascript -e 'tell application "iTerm2" to activate'`
 
-### 托盘 app 编译失败
+### 灵动岛不出现 / 点不动
 
 ```bash
-# 检查 Xcode CLT
-xcode-select -p
+# 1. 确认跑的是新版（可执行文件名叫 ClaudeHub）
+pgrep -x ClaudeHub || open -a "Claude Hub"
 
-# 清理后重新编译
-cd app/src-tauri && cargo clean && cargo build --release
+# 2. 重新编译安装
+bash scripts/build-swift-app.sh
 
-# 首次编译需下载约 2GB 依赖，确保网络通畅
+# 3. 确认 hook 链路通
+~/.local/bin/hubctl doctor
+```
+
+判断是否在运行**必须**用 `pgrep -x ClaudeHub`。用 `pgrep -f "Claude Hub"`
+会匹配到任何路径里含这个串的进程，历史上仓库里同时存在过三个同名 bundle，
+导致明明没在跑也被判成"已运行"。
+
+### app 编译失败
+
+```bash
+# 需要 Xcode 26（macOS 26 SDK）——灵动岛依赖 Liquid Glass API
+xcrun --show-sdk-version    # 应 >= 26
+sudo xcodebuild -runFirstLaunch
 ```
 
 ### 浏览器双引擎连不上
@@ -296,25 +352,28 @@ claude mcp get chrome-devtools
 claude-hub/
 ├── CLAUDE.md                  # Hub 行为规范（Claude 读取此文件决定行为）
 ├── projects.yaml.example      # 项目配置模板
-├── app/                       # 通知面板（Tauri v2）
-│   ├── src/                   # 前端（HTML + JS）
-│   └── src-tauri/             # 后端（Rust）
-│       └── src/
-│           ├── main.rs        # 入口 + Tauri 命令
-│           ├── watcher.rs     # 文件监听（/tmp/hub-signals/events/）
-│           ├── projects.rs    # 项目管理 + tmux 集成
-│           └── usage.rs       # 用量统计（解析 Claude 日志）
+├── HubKit/                    # 全部业务逻辑（SwiftPM package，可 swift test）
+│   ├── NOTES.md               # 实测踩到的坑（值得先读一遍）
+│   └── Sources/
+│       ├── HubCore/           # 数据模型（AgentSession 等）
+│       ├── HubProbe/          # 会话探测：sessions/*.json + tmux + 进程树
+│       ├── HubJump/           # 跳转引擎：iTerm jobPid 祖先链
+│       ├── HubIPC/            # Unix socket + hook 协议 + 风险分级
+│       ├── HubProjects/       # projects.yaml + git 状态 + 终端派发
+│       ├── HubUI/             # 灵动岛 + 主窗口（SwiftUI）
+│       ├── hubctl/            # hook 可执行文件
+│       └── ClaudeHubApp/      # 薄壳：@main + 窗口装配
+├── Resources/AppIcon.icns
 ├── scripts/
-│   ├── setup.sh               # 一键初始化（hooks + 语音 + 编译）
+│   ├── setup.sh               # 一键初始化（hook + 编译安装）
+│   ├── setup-swift-hooks.sh   # 装 hubctl 并改写 ~/.claude/settings.json
+│   ├── build-swift-app.sh     # 编译 + 签名 + 安装到 /Applications
 │   ├── setup-browser.sh       # 浏览器环境配置
-│   ├── build-app.sh           # 编译托盘 app（检查环境 + release 构建）
-│   ├── cc.sh                  # 一键启动（托盘 app + 调度中心）
+│   ├── cc.sh                  # 一键启动（app + 调度中心）
 │   ├── scan-projects.sh       # 扫描目录发现项目
 │   ├── add-project.sh         # 添加项目
 │   ├── welcome.sh             # 项目列表展示
 │   ├── project-menu.sh        # tmux 窗口菜单
-│   ├── hub-hook-stop.sh       # Stop hook（做完通知）
-│   ├── hub-hook-permission.sh # Notification hook（授权通知）
 │   ├── hub-run.sh             # 命令包装（带信号）
 │   └── hub-notify.sh          # 手动通知
 ├── skills/

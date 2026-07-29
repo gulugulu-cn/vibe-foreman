@@ -1,8 +1,0 @@
-# 隐私保护：把编译时的本地绝对路径重映射成中性路径，
-# 避免 Rust panic 信息把开发者用户名 / 源码目录暴露进 release 二进制。
-[build]
-rustflags = [
-    "--remap-path-prefix=/Users/dev/Documents/code/claude-hub=/build/claude-hub",
-    "--remap-path-prefix=/Users/dev/.cargo=/build/cargo",
-    "--remap-path-prefix=/Users/dev/.rustup=/build/rustup",
-]
