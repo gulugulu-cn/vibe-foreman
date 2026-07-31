@@ -17,20 +17,30 @@ public enum Shell {
     /// - Parameter timeout: 超时秒数。tmux 在 server 无响应时会挂住，
     ///   AppleScript 在目标 app 卡死时更会挂很久 —— 探测循环里必须有上界，
     ///   否则整个 UI 的刷新会被一个卡住的 osascript 拖死。
+    /// - Parameter environment: 在继承的环境之上追加/覆盖的变量。
+    ///   `StallJudge` 用它注入 `HUB_JUDGE=1` 来封死 hook 回环。
     @discardableResult
     public static func run(
         _ executable: String,
         _ arguments: [String],
-        timeout: TimeInterval = 5
+        timeout: TimeInterval = 5,
+        environment: [String: String] = [:]
     ) -> Result {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        if !environment.isEmpty {
+            process.environment = ProcessInfo.processInfo.environment
+                .merging(environment) { _, new in new }
+        }
 
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe
         process.standardError = errPipe
+
+        // /dev/null 而不是不设：子进程读 stdin 时会立刻拿到 EOF。
+        // `claude -p` 在拿不到 stdin 时会干等 3 秒才继续，这里直接避掉。
         process.standardInput = FileHandle.nullDevice
 
         do {

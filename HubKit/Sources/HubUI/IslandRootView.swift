@@ -1,4 +1,5 @@
 import HubCore
+import HubProbe
 import HubProjects
 import SwiftUI
 
@@ -23,6 +24,8 @@ public struct IslandRootView: View {
     private let onFocus: (AgentSession) -> Void
     private let onCollapse: () -> Void
     private let onLaunch: (Project, LaunchMode) -> Void
+    private let onPickStalled: (StallFinding) -> Void
+    private let onReply: (String) -> Void
 
     @Namespace private var glassNamespace
 
@@ -36,8 +39,12 @@ public struct IslandRootView: View {
         onSelect: @escaping (AgentSession) -> Void,
         onFocus: @escaping (AgentSession) -> Void,
         onCollapse: @escaping () -> Void,
-        onLaunch: @escaping (Project, LaunchMode) -> Void
+        onLaunch: @escaping (Project, LaunchMode) -> Void,
+        onPickStalled: @escaping (StallFinding) -> Void = { _ in },
+        onReply: @escaping (String) -> Void = { _ in }
     ) {
+        self.onPickStalled = onPickStalled
+        self.onReply = onReply
         self.store = store
         self.approvals = approvals
         self.projects = projects
@@ -53,8 +60,11 @@ public struct IslandRootView: View {
     private var state: IslandState { model.state }
 
     private var metrics: IslandMetrics {
-        IslandMetrics.metrics(
-            for: state, geometry: geometry, sessionCount: store.sessions.count
+        // `.nudge` 的宽度跟着**卡住的会话数**走，不是总会话数 ——
+        // 用总数算的话，9 个会话里只有 1 个卡住时岛会宽得离谱，中间全是空的。
+        let count = state == .nudge ? model.nudge.count : store.sessions.count
+        return IslandMetrics.metrics(
+            for: state, geometry: geometry, sessionCount: count
         )
     }
 
@@ -236,9 +246,17 @@ public struct IslandRootView: View {
     private var content: some View {
         switch state {
         case .rest:
-            RestContent(store: store)
+            RestContent(store: store, stalled: model.stalled)
                 .contentShape(Rectangle())
-                .onTapGesture { onToggleExpand() }
+                .onTapGesture {
+                    // 跑马灯正在报某件事时，点它就该直达那件事 ——
+                    // 跳到通用的会话列表等于让用户自己再找一遍刚看到的东西。
+                    if let top = model.stalled.first {
+                        onPickStalled(top)
+                    } else {
+                        onToggleExpand()
+                    }
+                }
         case .hover:
             HoverContent(store: store, model: model, onFocus: onFocus)
         case .expanded:
@@ -248,7 +266,8 @@ public struct IslandRootView: View {
                 model: model,
                 onSelect: onSelect,
                 onCollapse: onCollapse,
-                onLaunch: onLaunch
+                onLaunch: onLaunch,
+                onPickStalled: onPickStalled
             )
         case .intrusion:
             if let intrusion = model.intrusion {
@@ -267,6 +286,28 @@ public struct IslandRootView: View {
                     onSkip: { approvals.skip(request) }
                 )
             }
+        case .nudge:
+            NudgeContent(
+                findings: model.nudge,
+                store: store,
+                model: model,
+                onPick: onPickStalled
+            )
+        case .answer:
+            if let request = model.answer {
+                AnswerContent(
+                    request: request,
+                    onSend: onReply,
+                    onJump: {
+                        if let session = store.sessions.first(
+                            where: { $0.sessionId == request.sessionId }
+                        ) { onFocus(session) }
+                    },
+                    onDismiss: onCollapse,
+                    feedback: model.answerFeedback,
+                    onClearFeedback: { model.answerFeedback = nil }
+                )
+            }
         }
     }
 
@@ -280,8 +321,24 @@ public struct IslandRootView: View {
             return risk == .irreversible
                 ? IslandTheme.danger.opacity(0.28)
                 : IslandTheme.waiting.opacity(0.24)
+        case .nudge, .answer:
+            return StallPalette.color(for: model.topStallReason).opacity(0.24)
         default:
-            return nil
+            // 折叠态：有东西卡着就整条下唇染色。
+            // 这一层不呼吸（呼吸交给 RestContent 里的那条），它只负责底色。
+            guard let reason = model.topStallReason else { return nil }
+            return StallPalette.color(for: reason).opacity(0.12)
+        }
+    }
+}
+
+/// 滞留原因 → 颜色。断线是异常，用危险色；其余用待办色。
+enum StallPalette {
+    static func color(for reason: StallReason?) -> Color {
+        guard let reason else { return IslandTheme.waiting }
+        switch reason {
+        case .interrupted: return IslandTheme.danger
+        default: return IslandTheme.waiting
         }
     }
 }
@@ -295,8 +352,24 @@ public struct IslandRootView: View {
 /// 这也让悬停有了"奖励感"。
 struct RestContent: View {
     let store: SessionStore
+    /// 当前卡着的会话（含已经不再主动闯入的）。有它就上跑马灯。
+    var stalled: [StallFinding] = []
 
     var body: some View {
+        // 有东西卡着时，折叠态从"状态点阵"换成"滚动的原因"。
+        //
+        // 点阵回答的是"跑着几个"，而卡住的时候用户要知道的是"哪个、为什么"。
+        // 点阵在这种时候是纯噪音 —— 它每一颗都长得一样。
+        //
+        // **只在有 stall 时才滚**，平时回到静态点阵，不引入常驻的动画耗电。
+        if stalled.isEmpty {
+            dots
+        } else {
+            NudgeTicker(stalled: stalled, store: store)
+        }
+    }
+
+    private var dots: some View {
         HStack(spacing: 10) {
             // 左侧的等宽隐形占位。
             //
@@ -327,6 +400,85 @@ struct RestContent: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// 折叠态的跑马灯 —— 卡住的会话横向滚过下唇。
+///
+/// 用户原话："提示虽然有个 1 但是我可能关注其他屏幕就没看到"。
+/// 一个静止的小徽章在余光里等于不存在，会动的东西才会被眼角捕捉到。
+///
+/// 形态约束是硬的：下唇只有 14pt 高，字最大放到 9pt，所以文案必须极短
+/// （`StallReason.shortLabel` 全是三个字："断线了"/"在问你"/"待验收"）。
+struct NudgeTicker: View {
+    let stalled: [StallFinding]
+    let store: SessionStore
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var phase: CGFloat = 0
+
+    /// 滚动速度。pt/秒。慢到能读清，快到不会让人等。
+    private static let speed: CGFloat = 22
+
+    private var items: [(id: String, text: String, color: Color)] {
+        stalled.prefix(6).map { finding in
+            let name = store.sessions
+                .first { $0.sessionId == finding.sessionId }?
+                .name ?? finding.sessionId
+            return (
+                finding.sessionId,
+                "\(finding.reason.symbol) \(name) \(finding.reason.shortLabel)",
+                StallPalette.color(for: finding.reason)
+            )
+        }
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let content = strip
+            ZStack(alignment: .leading) {
+                if reduceMotion {
+                    // 减弱动态效果下不滚，只显示最紧急的那一条。
+                    // 信息不能丢，能丢的只是动效。
+                    content.frame(maxWidth: proxy.size.width, alignment: .leading)
+                } else {
+                    // 画两份首尾相接，位移到一份宽度时归零，得到无缝循环。
+                    // 单份的话滚出去之后会有一段空白。
+                    HStack(spacing: gap) {
+                        content
+                        content
+                    }
+                    .offset(x: -phase)
+                    .onAppear { start(width: proxy.size.width) }
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
+            .clipped()
+        }
+        .padding(.horizontal, 14)
+    }
+
+    private var gap: CGFloat { 18 }
+
+    private var strip: some View {
+        HStack(spacing: gap) {
+            ForEach(items, id: \.id) { item in
+                Text(item.text)
+                    .font(IslandTheme.label(9, .semibold))
+                    .foregroundStyle(item.color)
+                    .fixedSize()
+            }
+        }
+    }
+
+    private func start(width: CGFloat) {
+        // 估个宽度就够：滚动是循环的，估偏一点只影响循环周期，不影响观感。
+        let estimated = items.reduce(CGFloat(0)) { $0 + CGFloat($1.text.count) * 9 + gap }
+        guard estimated > 0 else { return }
+        let duration = Double(estimated / Self.speed)
+        withAnimation(.linear(duration: duration).repeatForever(autoreverses: false)) {
+            phase = estimated
+        }
     }
 }
 
@@ -639,6 +791,7 @@ struct ExpandedContent: View {
     let onSelect: (AgentSession) -> Void
     let onCollapse: () -> Void
     let onLaunch: (Project, LaunchMode) -> Void
+    var onPickStalled: (StallFinding) -> Void = { _ in }
 
     private var selected: AgentSession? {
         store.sessions.first { $0.sessionId == model.selectedSessionId }
@@ -711,7 +864,14 @@ struct ExpandedContent: View {
                     terminalLabel: store.terminalLabels[selected.sessionId],
                     jumpOutcome: store.lastJump?.sessionId == selected.sessionId
                         ? store.lastJump?.outcome : nil,
-                    onJump: { onSelect(selected) }
+                    stall: model.stalled.first { $0.sessionId == selected.sessionId },
+                    onJump: { onSelect(selected) },
+                    onAnswer: {
+                        guard let finding = model.stalled.first(
+                            where: { $0.sessionId == selected.sessionId }
+                        ) else { return }
+                        onPickStalled(finding)
+                    }
                 )
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
@@ -726,6 +886,8 @@ struct ExpandedContent: View {
                             session: session,
                             branch: store.workspaceGit[session.cwd]?.info.branch,
                             isSelected: session.sessionId == selected?.sessionId,
+                            stall: model.stalled
+                                .first { $0.sessionId == session.sessionId }?.reason,
                             // 点行 = 看详情。点行内的 ⇱ 按钮 = 直接跳转。
                             // 两个动作各有入口，不用"先选中再点第二下"。
                             onSelect: { model.selectedSessionId = session.sessionId },
@@ -966,6 +1128,9 @@ struct SessionRowView: View {
     let session: AgentSession
     var branch: String?
     var isSelected = false
+    /// 这一行卡住了吗。卡住的行要在列表里就能被认出来 ——
+    /// 否则用户得逐个点开才知道哪个在等他，而列表存在的意义正是"扫一眼"。
+    var stall: StallReason?
     var onSelect: () -> Void = {}
     var onJump: () -> Void = {}
 
@@ -1045,7 +1210,23 @@ struct SessionRowView: View {
 
             Spacer(minLength: 8)
 
-            if let waitingFor = session.waitingFor {
+            // 滞留徽章优先于 waitingFor：前者信息更具体
+            // （"在问你" / "断线了" vs 笼统的 "input needed"），
+            // 而且两个都显示会把行挤爆。
+            if let stall {
+                HStack(spacing: 3) {
+                    Text(stall.symbol).font(.system(size: 9))
+                    Text(stall.shortLabel)
+                        .font(IslandTheme.label(10, .bold))
+                }
+                .foregroundStyle(StallPalette.color(for: stall))
+                .padding(.horizontal, 6)
+                .frame(height: 17)
+                .background(
+                    Capsule().fill(StallPalette.color(for: stall).opacity(0.16))
+                )
+                .padding(.trailing, 8)
+            } else if let waitingFor = session.waitingFor {
                 Text(waitingFor)
                     .font(IslandTheme.label(10, .semibold))
                     .foregroundStyle(IslandTheme.waiting)

@@ -84,7 +84,45 @@ private func emitDecision(_ decision: HookDecision) {
     }
 }
 
+/// Hub 自己起的 `claude -p`（见 `StallJudge`）绝对不能再触发 hook。
+///
+/// 否则就是 hook → Hub → `claude -p` → hook 的无限回环：每判定一次就多生出
+/// 一个会话，几轮之后把机器跑满。
+///
+/// **这道防线不依赖 Claude CLI 的任何行为开关。** 实测 `--setting-sources ''`
+/// 并不能阻止 user 级 hooks 加载（本机 8 个会话同时在跑，靠 hubctl 的 atime
+/// 做间接探测全是噪音，最后是靠这里的 trace 文件才测出来的），
+/// 所以自己这一侧的早退是唯一保证有效的做法。
+///
+/// 顺带提供 `HUB_TRACE`：指向一个文件路径时，每次执行都追加一行。
+/// 这是唯一能把"我起的那个 claude"和"用户另外七个会话"区分开的探针 ——
+/// 环境变量会被子进程继承，而别人的会话没有这个变量。
+private func guardAgainstJudgeLoop(_ name: String) {
+    let env = ProcessInfo.processInfo.environment
+    let isJudge = env["HUB_JUDGE"] == "1"
+
+    if let trace = env["HUB_TRACE"], !trace.isEmpty {
+        let line = "\(Date().timeIntervalSince1970) \(name) judge=\(isJudge)\n"
+        if let handle = FileHandle(forWritingAtPath: trace) {
+            handle.seekToEndOfFile()
+            handle.write(Data(line.utf8))
+            try? handle.close()
+        } else {
+            try? line.write(toFile: trace, atomically: true, encoding: .utf8)
+        }
+    }
+
+    guard isJudge else { return }
+    if env["HUB_DEBUG"] == "1" {
+        FileHandle.standardError.write(Data("hubctl：HUB_JUDGE=1，跳过不上报\n".utf8))
+    }
+    // 什么都不输出就是放行。judge 用的会话本来也不该被审批拦。
+    exit(0)
+}
+
 private func runHook(_ name: String) -> Int32 {
+    guardAgainstJudgeLoop(name)
+
     let kind: HookEvent.Kind
     switch name {
     case "stop": kind = .stop

@@ -1,6 +1,7 @@
 import AppKit
 import HubCore
 import HubJump
+import HubProbe
 import HubProjects
 import SwiftUI
 
@@ -53,7 +54,14 @@ struct SessionDetailCard: View {
     var workspace: WorkspaceGit?
     var terminalLabel: String?
     var jumpOutcome: JumpOutcome?
+    /// 这个会话卡住了吗、为什么。
+    ///
+    /// 之前滞留信息只活在 `.nudge` 形态和折叠态的跑马灯里 —— 用户一展开列表
+    /// （也就是他真正要动手的地方）它就消失了，反而在最该看到的位置看不到。
+    var stall: StallFinding?
     let onJump: () -> Void
+    /// 进应答态直接回答。只有 `askedQuestion` 才给这个入口。
+    var onAnswer: (() -> Void)?
 
     private var accent: Color { IslandTheme.color(for: session.status) }
 
@@ -66,7 +74,13 @@ struct SessionDetailCard: View {
                 locationRow
                 factsRow
                 Spacer(minLength: 2)
-                commitLog
+                // 卡住时用滞留横幅**顶掉**提交记录。
+                // 两者都要位置，而"这件事在等你"永远比"三天前提交了什么"更急。
+                if stall != nil {
+                    stallBanner
+                } else {
+                    commitLog
+                }
             }
 
             Spacer(minLength: 4)
@@ -82,6 +96,77 @@ struct SessionDetailCard: View {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .stroke(accent.opacity(session.status == .idle ? 0.18 : 0.34), lineWidth: 1)
                 }
+        }
+    }
+
+    // MARK: 滞留横幅
+
+    /// 卡住的原因 + 能做什么。
+    ///
+    /// 三段式：图标、原因短语、具体内容。短语（"在问你"）负责扫一眼就懂，
+    /// 具体内容（问题原文 / 下一件任务 / 错误摘要）负责不用跳过去就知道是什么事。
+    @ViewBuilder
+    private var stallBanner: some View {
+        if let stall {
+            let tone = StallPalette.color(for: stall.reason)
+            HStack(alignment: .top, spacing: 7) {
+                Text(stall.reason.symbol)
+                    .font(.system(size: 11))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(stall.reason.shortLabel)
+                        .font(IslandTheme.label(11, .bold))
+                        .foregroundStyle(tone)
+                    Text(stallDetail(stall.reason))
+                        .font(IslandTheme.label(10.5, .regular))
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 4)
+
+                // 只有"在问你"给这个入口 —— 断线、待验收没有一句话就能回应的动作，
+                // 硬做成按钮是假的。
+                if case .askedQuestion = stall.reason, let onAnswer {
+                    Button {
+                        onAnswer()
+                    } label: {
+                        Text("回答").padding(.horizontal, 8)
+                    }
+                    .buttonStyle(IslandButtonStyle(
+                        emphasis: .prominent, tint: tone, height: 22
+                    ))
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(tone.opacity(0.14))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(tone.opacity(0.30), lineWidth: 1)
+                    }
+            }
+        }
+    }
+
+    private func stallDetail(_ reason: StallReason) -> String {
+        switch reason {
+        case .interrupted(let text):
+            return StallDetector.condense(text, limit: 70)
+        case .askedQuestion(let question):
+            return question
+        case .awaitingDecision(let why):
+            return why ?? "在等你授权或选择"
+        case .unfinishedTasks(let pending, let running, let next):
+            let head = next.map { "下一件：\($0)" } ?? "还有没做完的"
+            return "\(head)（待办 \(pending) · 进行中 \(running)）"
+        case .finishedAwaitingReview(let summary, let worked):
+            let time = worked >= 60 ? "干了 \(Int(worked / 60)) 分钟，" : ""
+            return time + (summary ?? "完成了一轮，等你验收")
         }
     }
 

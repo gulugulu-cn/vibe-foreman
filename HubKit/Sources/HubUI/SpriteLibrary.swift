@@ -357,7 +357,14 @@ enum SpriteLibrary {
             // 命令行：发光区变成一个左右走的光标，和"敲键盘"最容易区分开。
             glow = ["g...", ".g..", "..g.", "...g"][step % 4]
             hands = (2, 2)
-        case .waving, .resting, .yawning:
+        case .waving:
+            // **挥手时右手必须离开键盘。**
+            //
+            // `bodyRows` 已经在肩膀那行画了举起来的右手，这里再画一只在笔记本
+            // 右侧，同一个人就有了两只右手 —— waiting 是最需要被看清的状态，
+            // 结果偏偏是它画错。给一个落不到 0…4 的行号，右手就不会被画出来。
+            hands = (left: 2, right: -1)
+        case .resting, .yawning:
             hands = (2, 2)
         }
 

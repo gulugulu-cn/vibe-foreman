@@ -164,10 +164,112 @@ private func runUsage(_ rangeArgument: String?) {
     }
 }
 
+/// 无头跑一遍滞留判定。
+///
+/// 存在的理由和 `usage` 一样：滞留提醒是**时间驱动**的，靠 UI 验证意味着
+/// 干等三五分钟才知道判得对不对。这个子命令直接把当前每个会话的判定结果
+/// 和判据（transcript 尾部、任务清单、静默时长）一次打出来，
+/// 拿真实数据一眼就能看出规则是不是符合预期。
+private func runStall(useAI: Bool) {
+    let sessions = reader.readAll()
+    guard !sessions.isEmpty else {
+        print("没有存活的 Claude 会话。")
+        return
+    }
+
+    let transcripts = TranscriptReader()
+    let tasks = TaskStateReader()
+    let detector = StallDetector()
+    let judge = StallJudge()
+    let now = Date()
+
+    print("共 \(sessions.count) 个会话   （busyDuration 只有 app 在跑时才观测得到，这里一律未知）\n")
+
+    for session in sessions.sorted(by: { $0.status < $1.status }) {
+        let tail = transcripts.read(cwd: session.cwd, sessionId: session.sessionId)
+        let snapshot = tasks.read(sessionId: session.sessionId)
+
+        // 先不带 AI 判一次，判出来卡住了再决定要不要花额度问 AI ——
+        // 生产里也是这个顺序，确定性规则优先，AI 只做兜底增强。
+        let dry = StallDetector.Input(
+            session: session, tail: tail, tasks: snapshot, busyDuration: nil, ai: nil
+        )
+        var ai: StallSummary?
+        if useAI, detector.evaluate(dry, now: now) != nil,
+           let text = tail?.lastAssistantText {
+            ai = awaitSync { await judge.judge(sessionId: session.sessionId, assistantText: text) }
+        }
+
+        let input = StallDetector.Input(
+            session: session, tail: tail, tasks: snapshot, busyDuration: nil, ai: ai
+        )
+        let finding = detector.evaluate(input, now: now)
+
+        let silent = now.timeIntervalSince(
+            session.statusUpdatedAt ?? session.updatedAt ?? now
+        )
+        print("\(pad(session.name ?? session.sessionId, 38))"
+            + "\(pad(session.status.rawValue, 9))"
+            + "静默 \(Int(silent / 60)) 分钟")
+
+        let taskLabel = snapshot.map {
+            $0.isEmpty ? "空" : "待办\($0.pending) 进行\($0.inProgress) 完成\($0.completed)"
+        } ?? "无目录"
+        print("   任务：\(taskLabel)"
+            + "   尾部：\(tail == nil ? "读不到" : (tail!.endedWithApiError ? "API 错误" : "正常"))")
+
+        if let finding {
+            print("   → \(finding.reason.symbol) \(finding.reason.shortLabel)"
+                + "  [\(finding.grade == .high ? "高优" : "低优")]  \(describe(finding.reason))")
+        } else {
+            print("   → 不提醒")
+        }
+        if let ai {
+            print("   AI：\(ai.summary ?? "—")"
+                + (ai.options.isEmpty ? "" : "   选项 \(ai.options.joined(separator: " / "))")
+                + (ai.nextAction.map { "   下一步：\($0)" } ?? ""))
+        }
+        print("")
+    }
+
+    if useAI {
+        let ledger = awaitSync { await judge.ledger }
+        print("AI 调用 \(ledger.calls) 次（失败 \(ledger.failures)）"
+            + "  花费 $\(String(format: "%.4f", ledger.costUSD))")
+    }
+}
+
+/// 把 actor 上的异步调用桥回同步的 CLI 主流程。
+///
+/// 只在这个开发期 CLI 里用。app 里是真正的异步上下文，不需要也不该这么干。
+private func awaitSync<T: Sendable>(_ body: @escaping @Sendable () async -> T) -> T {
+    let semaphore = DispatchSemaphore(value: 0)
+    nonisolated(unsafe) var result: T?
+    Task {
+        result = await body()
+        semaphore.signal()
+    }
+    semaphore.wait()
+    return result!
+}
+
+private func describe(_ reason: StallReason) -> String {
+    switch reason {
+    case .interrupted(let text): return StallDetector.condense(text, limit: 50)
+    case .askedQuestion(let q): return q
+    case .awaitingDecision(let why): return why ?? "—"
+    case .unfinishedTasks(let p, let r, let next):
+        return "待办\(p) 进行\(r)" + (next.map { "，下一件：\($0)" } ?? "")
+    case .finishedAwaitingReview(let summary, _): return summary ?? "—"
+    }
+}
+
 let args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
 case "list", nil:
     runList()
+case "stall":
+    runStall(useAI: args.contains("--ai"))
 case "jump":
     guard args.count >= 2 else {
         print("用法：hubprobe jump <序号或 sessionId>")
@@ -177,6 +279,6 @@ case "jump":
 case "usage":
     runUsage(args.count >= 2 ? args[1] : nil)
 default:
-    print("用法：hubprobe [list | jump <序号或 sessionId> | usage [7|30|all]]")
+    print("用法：hubprobe [list | jump <序号或 sessionId> | usage [7|30|all] | stall [--ai]]")
     exit(1)
 }

@@ -1,5 +1,6 @@
 import AppKit
 import HubCore
+import HubProbe
 import HubProjects
 import SwiftUI
 
@@ -66,7 +67,7 @@ public final class IslandController {
     // MARK: - 生命周期
 
     public func show() {
-        guard let screen = NotchGeometry.preferredScreen() else {
+        guard let screen = NotchGeometry.activeScreen() else {
             HubLog.island.error("找不到可用屏幕，灵动岛未启动")
             return
         }
@@ -156,7 +157,7 @@ public final class IslandController {
     }
 
     private func realign() {
-        guard let panel, let screen = NotchGeometry.preferredScreen() else { return }
+        guard let panel, let screen = NotchGeometry.activeScreen() else { return }
         let geo = NotchGeometry(screen: screen)
         guard geo != geometry else { return }
 
@@ -185,7 +186,9 @@ public final class IslandController {
                 onSelect: { [weak self] session in self?.select(session) },
                 onFocus: { [weak self] session in self?.focus(session) },
                 onCollapse: { [weak self] in self?.collapse() },
-                onLaunch: { [weak self] project, mode in self?.onLaunch?(project, mode) }
+                onLaunch: { [weak self] project, mode in self?.onLaunch?(project, mode) },
+                onPickStalled: { [weak self] finding in self?.pickStalled(finding) },
+                onReply: { [weak self] text in self?.sendReply(text) }
             )
         )
     }
@@ -198,6 +201,8 @@ public final class IslandController {
         case "hover": return .hover
         case "expanded", "projects": return .expanded
         case "rest": return .rest
+        case "nudge": return .nudge
+        case "answer": return .answer
         default: return nil
         }
     }
@@ -209,20 +214,39 @@ public final class IslandController {
         if ProcessInfo.processInfo.environment["HUB_ISLAND_STATE"] == "projects" {
             model.tab = .projects
         }
+        // 滞留提醒是时间驱动的，真实触发要等会话安静好几分钟 ——
+        // 钉住形态时必须同时喂进合成的判定结果，否则画面是空的。
+        //
+        // `stalled` 对**每个**形态都要喂：折叠态靠它出跑马灯，
+        // 展开态靠它出滞留横幅和行内徽章。只喂 nudge/answer 的话，
+        // 那两处新东西在截图里就是空的。
+        if DemoFixtures.isEnabled {
+            model.stalled = DemoFixtures.stallFindings()
+            model.nudge = model.stalled
+            model.answer = DemoFixtures.answerRequest()
+        }
         model.transition(to: pinnedState)
         updateHitPath()
-        HubLog.island.notice(
-            "形态被环境变量钉住：\(String(describing: pinnedState), privacy: .public)"
-        )
+        // 打**实际**形态而不是环境变量的值 —— 之前只打后者，结果钉住失效时
+        // 日志照样显示"已钉住"，把排查带偏了。
+        HubLog.island.notice("""
+        形态钉住请求 \(String(describing: pinnedState), privacy: .public)，\
+        实际 \(String(describing: self.model.state), privacy: .public)，\
+        滞留 \(self.model.stalled.count, privacy: .public) 条
+        """)
     }
 
     /// 所有形态迁移的唯一入口 —— 迁移之后必须同步 AppKit 侧的命中区。
     ///
-    /// 钉住时**忽略一切迁移请求**。以前只是在启动时设一次，
-    /// 紧接着悬停监听发现指针不在岛上就把它收了回去 —— 这个调试开关等于是坏的，
+    /// 钉住时忽略**自动**迁移。以前只是在启动时设一次，紧接着悬停监听
+    /// 发现指针不在岛上就把它收了回去 —— 这个调试开关等于是坏的，
     /// 而它恰恰是"没法用鼠标验证时"唯一的手段。
-    private func setState(_ new: IslandState) {
-        guard pinnedState == nil else { return }
+    ///
+    /// 但**用户主动的操作必须放行**（`userInitiated: true`）。
+    /// 一律冻住的代价在实机上暴露过：岛钉在展开态、又跟着光标跑到了外接屏，
+    /// 用户点收起没反应，只能去杀进程 —— 一个调试开关不该能把界面卡死。
+    private func setState(_ new: IslandState, userInitiated: Bool = false) {
+        guard userInitiated || pinnedState == nil else { return }
         guard new != model.state else { return }
         model.transition(to: new)
         updateHitPath()
@@ -356,7 +380,45 @@ public final class IslandController {
         mouseMonitor = nil
     }
 
+    /// 上次检查跨屏的时刻。跨屏判定要遍历所有屏幕做矩形命中，
+    /// 而 mouseMoved 每秒能来几十次 —— 必须节流。
+    private var lastScreenCheck: Date = .distantPast
+    private static let screenCheckInterval: TimeInterval = 0.5
+
+    /// 指针换屏了就把岛搬过去。
+    ///
+    /// 这是"用户在外接屏工作时看不到提醒"的正解：岛以前锁死在内建刘海屏上，
+    /// 用户看着另一块屏的时候，任何提醒在物理上都不在他视野里。
+    ///
+    /// **只在折叠态搬家。** 展开 / 审批 / 提醒 / 应答态搬家会把用户正在点的
+    /// 东西从他手底下挪走 —— 尤其应答态，按钮位置一变，本来要点"取消"的
+    /// 那一下可能落到"确认发送"上。这条不能省。
+    private func followCursorAcrossScreens(force: Bool = false) {
+        guard force || (model.state == .rest && pinnedState == nil) else { return }
+
+        if !force {
+            let now = Date()
+            guard now.timeIntervalSince(lastScreenCheck) >= Self.screenCheckInterval
+            else { return }
+            lastScreenCheck = now
+        }
+
+        guard let panel, let screen = NotchGeometry.screenUnderCursor() else { return }
+        let geo = NotchGeometry(screen: screen)
+        guard geo != geometry else { return }
+
+        geometry = geo
+        position(panel, on: geo)
+        installRootView(geometry: geo)
+        updateHitPath()
+        HubLog.island.notice(
+            "岛跟随光标切到 \(screen.localizedName, privacy: .public)"
+        )
+    }
+
     private func handleGlobalMouseMoved() {
+        followCursorAcrossScreens()
+
         guard let geometry else { return }
         // 展开、闯入、审批时不受悬停控制 —— 那几个态有各自的退出条件，
         // 尤其审批绝不能因为鼠标移开就消失。
@@ -414,7 +476,7 @@ public final class IslandController {
             if model.selectedSessionId == nil {
                 model.selectedSessionId = (store.mostUrgent ?? store.sessions.first)?.sessionId
             }
-            setState(.expanded)
+            setState(.expanded, userInitiated: true)
             installOutsideClickMonitor()
         }
     }
@@ -429,8 +491,12 @@ public final class IslandController {
 
     private func collapse() {
         guard model.state != .approval else { return }
-        setState(.rest)
+        // 收起永远是用户主动的动作，钉住也必须能收 —— 否则界面会被卡死。
+        setState(.rest, userInitiated: true)
         removeOutsideClickMonitor()
+        // 收起时顺便回到光标所在的屏。岛跟着光标走只在折叠态生效，
+        // 刚收起正是最该重新对齐的时刻（用户很可能已经换屏了）。
+        followCursorAcrossScreens(force: true)
     }
 
     public func expand() {
@@ -501,6 +567,144 @@ public final class IslandController {
                 guard let self, self.model.state == .intrusion else { return }
                 self.model.intrusion = nil
                 self.setState(self.stateBeforeIntrusion == .expanded ? .expanded : .rest)
+            }
+        }
+    }
+
+    // MARK: - 滞留提醒
+
+    /// 上一次滞留提醒回落到哪个形态。
+    private var stateBeforeNudge: IslandState = .rest
+
+    /// 用户在岛上受理了某个滞留（跳转或应答）。上层要据此压制一轮升级。
+    public var onAcknowledgeStall: ((String) -> Void)?
+
+    /// 更新"当前有哪些卡着"。折叠态的跑马灯和下唇染色读它。
+    ///
+    /// 和 `presentNudge` 分开：这个**不改变形态**，只更新常驻的被动提示。
+    /// 已经放弃主动闯入的会话也在这里 —— 不吵，但信息得留着。
+    public func updateStalled(_ findings: [StallFinding]) {
+        model.stalled = findings
+    }
+
+    /// 弹出滞留提醒。
+    ///
+    /// 优先级低于审批和闯入：审批在等一个不可逆操作的决策，
+    /// 滞留提醒再急也不该把它挤掉。
+    public func presentNudge(_ findings: [StallFinding]) {
+        guard !findings.isEmpty else { return }
+        guard model.state != .approval, model.state != .answer else { return }
+        // 用户正在展开态里操作，不要把界面从他手底下换掉。
+        guard model.state == .rest || model.state == .nudge else { return }
+
+        nudgeDismissTask?.cancel()
+        if model.state != .nudge { stateBeforeNudge = model.state }
+        model.nudge = findings
+        setState(.nudge)
+
+        // 比 intrusion 停得久：这里有多个小人要认，还要给出点击的机会。
+        nudgeDismissTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.model.state == .nudge else { return }
+                self.model.nudge = []
+                self.setState(self.stateBeforeNudge == .expanded ? .expanded : .rest)
+            }
+        }
+    }
+
+    private var nudgeDismissTask: Task<Void, Never>?
+
+    /// 点了某个卡住的会话的小人。
+    ///
+    /// 能在岛上答的（AI 判定为提问）就进应答态；其余一律跳转过去 ——
+    /// 断线、待验收这些没有"一句话就能回应"的动作，硬做成按钮是假的。
+    private func pickStalled(_ finding: StallFinding) {
+        nudgeDismissTask?.cancel()
+        onAcknowledgeStall?(finding.sessionId)
+
+        guard case .askedQuestion(let question) = finding.reason,
+              let session = store.sessions.first(where: { $0.sessionId == finding.sessionId })
+        else {
+            // 不是提问的（断线、待验收、有后续）没有"一句话就能回应"的动作，
+            // 但也**不该直接把人甩到终端** —— 用户点这一下是想先看清楚是什么事。
+            // 展开并选中它，详情卡里有滞留横幅、分支、提交记录和跳转按钮，
+            // 看完再决定去不去。
+            model.expand(focusing: finding.sessionId)
+            updateHitPath()
+            installOutsideClickMonitor()
+            return
+        }
+
+        let name = session.name ?? session.fallbackProjectName
+        model.answerFeedback = nil
+        model.answer = AnswerRequest(
+            sessionId: finding.sessionId,
+            sessionName: name,
+            question: question,
+            options: stallOptions[finding.sessionId] ?? [],
+            target: nil
+        )
+        setState(.answer)
+
+        // 目标位置要跑 tmux / AppleScript 才知道，放后台解析，回来再补上。
+        // 先把面板显示出来，不要为了一行副标题卡住 UI。
+        let reply = self.reply
+        Task { [weak self] in
+            let target = await Task.detached(priority: .userInitiated) {
+                await MainActor.run { reply.locate(sessionId: finding.sessionId, session: session) }
+            }.value
+            await MainActor.run {
+                guard let self, var current = self.model.answer,
+                      current.sessionId == finding.sessionId else { return }
+                current = AnswerRequest(
+                    sessionId: current.sessionId, sessionName: current.sessionName,
+                    question: current.question, options: current.options, target: target
+                )
+                self.model.answer = current
+            }
+        }
+    }
+
+    /// AI 给的快捷回答选项，按 sessionId 存。上层在判定时填。
+    public var stallOptions: [String: [String]] = [:]
+
+    private let reply = TerminalReply()
+
+    /// 确认发送。**所有安全护栏在 `TerminalReply` 里**，这里只负责回显。
+    private func sendReply(_ text: String) {
+        guard let request = model.answer else { return }
+        model.answerFeedback = "发送中…"
+        let reply = self.reply
+        Task { [weak self] in
+            let outcome = await reply.send(text: text, to: request.sessionId)
+            await MainActor.run {
+                guard let self else { return }
+                switch outcome {
+                case .sent(let target):
+                    self.model.answerFeedback = "已发送 · \(target)"
+                    self.onAcknowledgeStall?(request.sessionId)
+                    // 发完停一下再收，让用户看清回显。
+                    Task {
+                        try? await Task.sleep(for: .seconds(1.6))
+                        await MainActor.run {
+                            guard self.model.state == .answer else { return }
+                            self.model.answer = nil
+                            self.collapse()
+                        }
+                    }
+                case .sessionBecameBusy:
+                    // 护栏①触发：用户已经自己在那边动手了。如实说，不要硬发。
+                    self.model.answerFeedback = "它又开始干活了，没发"
+                case .notLocated:
+                    self.model.answerFeedback = "定位不到终端，请手动过去"
+                case .rejected(let why):
+                    self.model.answerFeedback = "内容不合法：\(why)"
+                case .failed(let why):
+                    self.model.answerFeedback = "发送失败：\(why)"
+                    HubLog.jump.error("岛上应答失败：\(why, privacy: .public)")
+                }
             }
         }
     }

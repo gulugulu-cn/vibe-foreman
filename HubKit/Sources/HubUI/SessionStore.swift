@@ -32,6 +32,22 @@ public final class SessionStore {
     /// 否则用户点完只能靠"终端有没有跳过去"自己猜。
     public private(set) var lastJump: (sessionId: String, outcome: JumpOutcome)?
 
+    /// sessionId → 上一轮活干了多久（一次完整的 busy/shell → idle/waiting）。
+    ///
+    /// 滞留提醒**按这个分级**：干了半小时的活值得主动打断你去验收，
+    /// 干了半分钟的不值得 —— 同时跑七八个会话时，小活也弹会立刻变成骚扰。
+    ///
+    /// 为什么必须自己观测：Claude 自己在界面上显示的 "Crunched for 29m 54s"
+    /// 不落到任何我们能读的文件里。`sessions/<PID>.json` 只有当前状态和
+    /// 状态变更时刻，推不出上一段状态持续了多久。
+    ///
+    /// app 重启会丢，这是可以接受的 —— 丢了就退化成"不知道"，
+    /// 而 `StallDetector` 对"不知道"的处理是按高优，不会漏报。
+    public private(set) var lastWorkDuration: [String: TimeInterval] = [:]
+
+    /// sessionId → 这一轮 busy 是什么时候开始的。只在观测期间有值。
+    private var workStartedAt: [String: Date] = [:]
+
     private let reader: ClaudeSessionReader
     private let jumpEngine: JumpEngine
     private var timer: Timer?
@@ -100,12 +116,56 @@ public final class SessionStore {
     public func refresh() {
         let fresh = reader.readAll()
         let sorted = Self.sort(fresh)
+        observeWorkDurations(sorted)
         // 只在真的变了时才赋值：@Observable 的写入会触发 SwiftUI 重绘，
         // 每秒无脑重绘 9 行列表是没必要的开销。
         if sorted != sessions {
             sessions = sorted
         }
         lastRefresh = Date()
+    }
+
+    /// 观测 busy → idle 的跃迁，记下这一轮活干了多久。
+    ///
+    /// 必须在 `sessions` 被覆盖**之前**调用 —— 它要拿旧快照做对比。
+    ///
+    /// 用 `statusUpdatedAt` 而不是"我们发现它变了"的墙钟时间：轮询间隔在
+    /// 全空闲时是 5 秒，用发现时刻算会把误差累进时长里；而 `statusUpdatedAt`
+    /// 是 Claude 自己写的状态变更时刻，精确得多。
+    private func observeWorkDurations(_ fresh: [AgentSession]) {
+        let previous = Dictionary(
+            sessions.map { ($0.sessionId, $0.status) }, uniquingKeysWith: { a, _ in a }
+        )
+
+        for session in fresh {
+            let wasWorking = previous[session.sessionId]?.isWorking ?? false
+            let isWorking = session.status.isWorking
+
+            switch (wasWorking, isWorking) {
+            case (false, true):
+                // 开工。first-seen 的会话也会走这里，但它可能已经跑了很久了，
+                // 那种情况下算出来的时长偏短 —— 宁可偏短（判成低优、只上跑马灯），
+                // 也不要凭空估一个大数把用户吵醒。
+                workStartedAt[session.sessionId] =
+                    session.statusUpdatedAt ?? session.updatedAt ?? Date()
+
+            case (true, false):
+                // 收工。
+                guard let started = workStartedAt.removeValue(forKey: session.sessionId)
+                else { break }
+                let ended = session.statusUpdatedAt ?? session.updatedAt ?? Date()
+                let duration = ended.timeIntervalSince(started)
+                if duration > 0 { lastWorkDuration[session.sessionId] = duration }
+
+            default:
+                break
+            }
+        }
+
+        // 会话没了就把它的记录清掉，别让字典无限涨。
+        let alive = Set(fresh.map(\.sessionId))
+        workStartedAt = workStartedAt.filter { alive.contains($0.key) }
+        lastWorkDuration = lastWorkDuration.filter { alive.contains($0.key) }
     }
 
     /// 排序即 UI 优先级。
@@ -144,6 +204,11 @@ public final class SessionStore {
     /// 展开岛的时候调一次即可。有 12 秒的节流：解析要跑 AppleScript 遍历 iTerm
     /// 全部 session 再加一次 `tmux list-panes`，几十到几百毫秒，不该跟着渲染走。
     public func resolveTerminalLabels(force: Bool = false) {
+        // 演示模式的会话不在任何终端里，真解析只会得到"未定位到终端"。
+        if DemoFixtures.isEnabled {
+            terminalLabels = DemoFixtures.terminalLabels()
+            return
+        }
         guard !resolvingTerminals else { return }
         if !force, Date().timeIntervalSince(lastTerminalResolve) < 12 { return }
         resolvingTerminals = true

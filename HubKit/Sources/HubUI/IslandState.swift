@@ -15,6 +15,13 @@ public enum IslandState: Equatable, Sendable {
     case intrusion
     /// 审批。高风险操作拦截，等用户决策。**不会自动回落。**
     case approval
+    /// 滞留提醒。**聚合**多个卡住的会话，小人从刘海弹出来排开，每个可点。
+    ///
+    /// 和 `intrusion` 刻意分开，语义不同：`intrusion` 是"某件事刚发生"，
+    /// 单会话、两秒划过；`nudge` 是"你有 N 件事卡着"，停得更久、可交互。
+    case nudge
+    /// 岛上应答。显示 AI 的问题和快捷回答，**不会自动回落**。
+    case answer
 }
 
 /// 某个形态在某块屏幕上的具体尺寸。
@@ -95,6 +102,77 @@ public struct IslandMetrics: Equatable, Sendable {
         return min(max(ideal, 264), 520)
     }
 
+    // MARK: - 滞留提醒态几何
+    //
+    // 和悬停态一样，这些常量**同时被 IslandMetrics 和 NudgeContent 读**，
+    // 必须共用同一份。两边各写各的那次，内容算出 113.5pt 塞进 96pt 的容器，
+    // 外面还套着 clipShape，直接被裁掉 17.5pt —— 就是用户看到的"信息显示不全"。
+
+    /// 一个小人占的边长（16×16 art × 2pt）。
+    public static let nudgeSpriteSide: CGFloat = 32
+    public static let nudgeSpriteSpacing: CGFloat = 12
+    /// 最多摆几个。再多就该去展开态看列表了。
+    public static let nudgeSpriteLimit = 6
+    /// 小人被指到时抬起的高度，Canvas 顶部要留出来。
+    public static let nudgeLift: CGFloat = 2
+    /// 小人上方的原因图标行（⚡ / ❓ / ⚠ / ▸ / ✓）。
+    public static let nudgeIconHeight: CGFloat = 14
+    /// 小人下方的会话名行（9pt 字）。
+    public static let nudgeNameHeight: CGFloat = 12
+    /// 顶部那行标题（"2 个会话在等你"）。
+    public static let nudgeHeaderHeight: CGFloat = 16
+    public static let nudgeGap: CGFloat = 4
+    public static let nudgeVerticalInset: CGFloat = 10
+    public static let nudgeSideInset: CGFloat = 22
+
+    /// 一格的高度：图标 + 小人（含抬升）+ 名字。整格都可点。
+    public static var nudgeCellHeight: CGFloat {
+        nudgeIconHeight + nudgeSpriteSide + nudgeLift + nudgeNameHeight + nudgeGap * 2
+    }
+
+    public static var nudgeContentHeight: CGFloat {
+        nudgeVerticalInset * 2 + nudgeHeaderHeight + nudgeGap + nudgeCellHeight
+    }
+
+    public static func nudgeRowWidth(count: Int) -> CGFloat {
+        let n = max(1, min(count, nudgeSpriteLimit))
+        return CGFloat(n) * nudgeSpriteSide + CGFloat(n - 1) * nudgeSpriteSpacing
+    }
+
+    public static func nudgeWidth(count: Int) -> CGFloat {
+        let ideal = nudgeRowWidth(count: count) + nudgeSideInset * 2
+        // 下限保证标题那行放得下（标题本身有 lineLimit(1) 兜底，
+        // 所以不需要为最长的会话名留空间）；上限别横跨整个屏幕。
+        //
+        // 下限不能设太高：6 个小人也才 296pt，下限一旦到 300，
+        // "宽度跟着数量走"就被压平成了固定宽度。
+        return min(max(ideal, 264), 520)
+    }
+
+    // MARK: - 应答态几何
+
+    public static let answerHeaderHeight: CGFloat = 20
+    /// 问题正文最多三行 13pt。
+    public static let answerQuestionHeight: CGFloat = 48
+    /// 按钮行（含发送预览态的两个按钮）。
+    public static let answerButtonsHeight: CGFloat = 28
+    /// 发送预览里那条"将发送到 X：内容"。
+    public static let answerPreviewHeight: CGFloat = 40
+    public static let answerVerticalInset: CGFloat = 12
+    public static let answerGap: CGFloat = 8
+
+    /// **提问态和预览态取同一个高度。**
+    ///
+    /// 两态高度不同的话，点一下按钮岛会跳一下 —— 而这一跳发生在用户正要去点
+    /// "确认发送"的时候，按钮会在指针底下移位。宁可有一点空白也不能让它跳。
+    public static var answerContentHeight: CGFloat {
+        let asking = answerHeaderHeight + answerGap + answerQuestionHeight
+            + answerGap + answerButtonsHeight
+        let confirming = answerHeaderHeight + answerGap + answerPreviewHeight
+            + answerGap + answerButtonsHeight
+        return answerVerticalInset * 2 + max(asking, confirming)
+    }
+
     public static func metrics(
         for state: IslandState,
         geometry: NotchGeometry,
@@ -123,6 +201,16 @@ public struct IslandMetrics: Equatable, Sendable {
                 return IslandMetrics(bodyWidth: 360, bodyHeight: 62, bottomRadius: 22)
             case .approval:
                 return IslandMetrics(bodyWidth: 470, bodyHeight: 248, bottomRadius: 26)
+            case .nudge:
+                return IslandMetrics(
+                    bodyWidth: nudgeWidth(count: sessionCount),
+                    bodyHeight: nudgeContentHeight,
+                    bottomRadius: 26
+                )
+            case .answer:
+                return IslandMetrics(
+                    bodyWidth: 460, bodyHeight: answerContentHeight, bottomRadius: 26
+                )
             }
         } else {
             // 无刘海：折叠态是个独立胶囊，不是"半个下唇"。
@@ -141,6 +229,16 @@ public struct IslandMetrics: Equatable, Sendable {
                 return IslandMetrics(bodyWidth: 360, bodyHeight: 58, bottomRadius: 22)
             case .approval:
                 return IslandMetrics(bodyWidth: 470, bodyHeight: 244, bottomRadius: 26)
+            case .nudge:
+                return IslandMetrics(
+                    bodyWidth: nudgeWidth(count: sessionCount),
+                    bodyHeight: nudgeContentHeight,
+                    bottomRadius: 24
+                )
+            case .answer:
+                return IslandMetrics(
+                    bodyWidth: 460, bodyHeight: answerContentHeight, bottomRadius: 24
+                )
             }
         }
     }
@@ -199,6 +297,18 @@ public enum IslandAnimation {
         case (.rest, .expanded):
             return .bouncy(duration: 0.46, extraBounce: 0.14)
         case (.expanded, _):
+            return .smooth(duration: 0.28)
+        case (_, .nudge):
+            // 比 intrusion 更欠阻尼：它出场的前提是"你已经错过一次了"，
+            // 那个回弹就是在拽注意力。小人从刘海里被"甩"出来的观感也靠它。
+            return .spring(response: 0.34, dampingFraction: 0.58)
+        case (.nudge, .answer):
+            return .snappy(duration: 0.32, extraBounce: 0.05)
+        case (.nudge, _):
+            return .smooth(duration: 0.26)
+        case (_, .answer):
+            return .spring(response: 0.32, dampingFraction: 0.74)
+        case (.answer, _):
             return .smooth(duration: 0.28)
         case (_, .intrusion):
             // 欠阻尼，回弹是为了吸引注意 —— 这是唯一一个主动打扰用户的形态。

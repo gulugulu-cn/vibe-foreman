@@ -35,6 +35,15 @@ public enum SessionStatus: String, Codable, Sendable, CaseIterable, Comparable {
     public var isActive: Bool {
         self == .busy || self == .shell || self == .waiting
     }
+
+    /// 是否**正在干活**。
+    ///
+    /// 和 `isActive` 的区别在 `waiting`：那是停下来等人，不是在干活。
+    /// 用它来观测"这一轮活干了多久"，把 waiting 算进去会让时长虚高 ——
+    /// 一个等了两小时授权的会话会被记成"干了两小时"，从而误判成高优。
+    public var isWorking: Bool {
+        self == .busy || self == .shell
+    }
 }
 
 /// 会话类型。`bg` 是通过后台任务派发的，带 `jobId`。

@@ -1,4 +1,5 @@
 import AppKit
+import HubProbe
 import SwiftUI
 
 /// 灵动岛的可观察状态源。
@@ -30,6 +31,24 @@ public final class IslandModel {
     public private(set) var previousState: IslandState = .rest
 
     public var intrusion: IntrusionEvent?
+
+    /// 当前 `.nudge` 态要展示的那一批。
+    public var nudge: [StallFinding] = []
+
+    /// 所有卡着的会话，**含已经不再主动闯入的**。
+    ///
+    /// 折叠态的跑马灯和下唇染色读它 —— 放弃"闯入"不等于放弃"告知"，
+    /// 信息要一直留在岛上。
+    public var stalled: [StallFinding] = []
+
+    /// `.answer` 态正在回答的那个问题。
+    public var answer: AnswerRequest?
+
+    /// 发送结果的回显。发完不告诉用户成没成，他只能自己切过去看。
+    public var answerFeedback: String?
+
+    /// 最紧急的滞留原因。下唇染色按它取色。
+    public var topStallReason: StallReason? { stalled.first?.reason }
 
     /// 悬停中的小人。hover 态下方那行字实时显示它的名字和状态。
     public var hoveredSessionId: String?

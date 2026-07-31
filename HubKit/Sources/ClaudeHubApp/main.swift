@@ -1,6 +1,7 @@
 import AppKit
 import HubCore
 import HubIPC
+import HubProbe
 import HubProjects
 import HubUI
 import SwiftUI
@@ -13,8 +14,14 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    private let store = SessionStore()
-    private let projects = ProjectStore()
+    // 演示模式用合成数据跑，专门给截图用 —— 真实数据里全是内部项目名和分支名。
+    // 见 DemoFixtures。
+    private let store = DemoFixtures.isEnabled
+        ? SessionStore(reader: DemoFixtures.makeReader())
+        : SessionStore()
+    private let projects = DemoFixtures.isEnabled
+        ? ProjectStore(yamlURL: DemoFixtures.projectsYAML)
+        : ProjectStore()
     private let approvals = ApprovalCoordinator()
     private let notifications = HubNotificationCenter()
 
@@ -26,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notifications: notifications, projects: projects
     )
     private lazy var dispatch = TerminalDispatch()
+    private lazy var stalls = StallWatcher(store: store)
 
     private var statusItem: NSStatusItem?
     private var mainWindow: NSWindow?
@@ -35,6 +43,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // .accessory：不在 Dock 显示图标，也不占应用切换器的位置。
         // 岛和托盘就是这个 app 的全部门面。
         NSApp.setActivationPolicy(.accessory)
+
+        // 必须在任何一次读取之前把合成数据写到盘上。
+        if DemoFixtures.isEnabled { DemoFixtures.materialize() }
 
         projects.load()
         projects.startGitPolling()
@@ -63,9 +74,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.launch(project, mode)
         }
 
+        // 滞留守望：岛原来只在事件发生那一瞬间提醒，之后再也不喊。
+        // 用户错过那一下（在看另一块屏、或者干脆没在看）就永远错过了。
+        stalls.onStalledChanged = { [weak self] findings in
+            self?.island.updateStalled(findings)
+        }
+        stalls.onNudge = { [weak self] nudge in
+            self?.present(nudge)
+        }
+        stalls.onOptions = { [weak self] sessionId, options in
+            self?.island.stallOptions[sessionId] = options
+        }
+        island.onAcknowledgeStall = { [weak self] sessionId in
+            self?.stalls.acknowledge(sessionId)
+        }
+        // 截图模式（演示数据 + 钉住形态）下不要启动守望：它 30 秒后会用
+        // 自己对演示会话的判定覆盖掉预置的那一组，而演示会话没有真实的
+        // transcript 和任务清单，判出来清一色是"待验收"——
+        // 五类原因的区分恰恰是要展示的东西。
+        let screenshotMode = DemoFixtures.isEnabled
+            && ProcessInfo.processInfo.environment["HUB_ISLAND_STATE"] != nil
+        if !screenshotMode { stalls.start() }
+
         island.show()
         installStatusItem()
         observeApprovalQueue()
+
+        // 截图用：主窗口平时只能从托盘菜单打开，而截图脚本没法可靠地驱动菜单。
+        if ProcessInfo.processInfo.environment["HUB_OPEN_WINDOW"] == "1" {
+            openMainWindow()
+        }
 
         // 用 Logger 而不是 NSLog，且显式 `privacy: .public` —— 否则统一日志
         // 会把插值全部隐成 <private>，排障时等于没打。见 HubLog 的说明。
@@ -78,7 +116,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         """)
     }
 
+    /// 把一次滞留提醒同时送到岛和通知中心。
+    ///
+    /// 两条路都要走：岛负责"你正看着这块屏时的余光"，
+    /// 系统通知负责"你在全屏应用里、或者干脆在看别的屏"。
+    private func present(_ nudge: Nudge) {
+        island.presentNudge(nudge.findings)
+
+        // 提醒是时间驱动的，没有日志就没法验证"它到底喊没喊、第几轮、为什么"——
+        // 而这恰恰是最需要事后追查的一类行为。
+        let summary = nudge.findings
+            .map { "\($0.reason.symbol)\($0.reason.shortLabel):\($0.sessionId.prefix(8))" }
+            .joined(separator: " ")
+        HubLog.island.notice("""
+        滞留提醒 第 \(nudge.round, privacy: .public) 轮\
+        \(nudge.sound ? " 有声" : "", privacy: .public)\
+        \(nudge.renotify ? " 重发通知" : "", privacy: .public) —— \
+        \(summary, privacy: .public)
+        """)
+
+        guard let top = nudge.findings.first else { return }
+        let session = store.sessions.first { $0.sessionId == top.sessionId }
+        let name = session?.name
+            ?? projects.projectName(forPath: session?.cwd ?? "")
+            ?? top.sessionId
+
+        let body: String
+        switch top.reason {
+        case .interrupted:
+            body = "连接断了，这一轮没跑完"
+        case .askedQuestion(let question):
+            body = question
+        case .awaitingDecision(let why):
+            body = why ?? "在等你授权"
+        case .unfinishedTasks(let pending, let running, let next):
+            body = next.map { "还差：\($0)" } ?? "还有 \(pending + running) 项没做完"
+        case .finishedAwaitingReview(let summary, _):
+            body = summary ?? "完成了一轮，等你验收"
+        }
+
+        let more = nudge.findings.count > 1 ? "（另有 \(nudge.findings.count - 1) 个）" : ""
+        notifications.post(
+            title: "\(top.reason.symbol) \(name)\(more)",
+            body: body,
+            sessionId: top.sessionId,
+            sound: nudge.sound,
+            // 升级到这一档时必须换 identifier，否则新通知只是静默替换旧的，
+            // 不会重新弹横幅 —— 用户根本看不到"又催了一次"。
+            distinctBy: nudge.renotify ? "r\(nudge.round)" : nil
+        )
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        stalls.stop()
         approvalObserver?.cancel()
         approvals.stopOrphanSweep()
         hooks.stop()

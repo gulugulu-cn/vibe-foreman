@@ -71,6 +71,18 @@ public struct NotchGeometry: Equatable, Sendable {
 
     /// 鼠标当前所在的屏幕。审批弹窗用它 —— 那种要用户立刻决策的东西
     /// 必须出现在用户正在看的地方，而不是固定在内建屏。
+    /// 岛该出现在哪块屏上 —— **光标所在的那块**，没有就回到有刘海的那块。
+    ///
+    /// 以前一律用 `preferredScreen()`（永远是内建的刘海屏），于是用户在外接屏
+    /// 上工作时，岛在物理上就不在他的视野里。他的原话是
+    /// "我可能关注其他屏幕就没看到" —— 这条不解决，跑马灯、呼吸、主动闯入
+    /// 全都是白做的。
+    ///
+    /// 旁边的 `screenUnderCursor()` 其实一开始就写好了，只是全项目零调用。
+    public static func activeScreen() -> NSScreen? {
+        screenUnderCursor() ?? preferredScreen()
+    }
+
     public static func screenUnderCursor() -> NSScreen? {
         let point = NSEvent.mouseLocation
         return NSScreen.screens.first { $0.frame.contains(point) } ?? NSScreen.main

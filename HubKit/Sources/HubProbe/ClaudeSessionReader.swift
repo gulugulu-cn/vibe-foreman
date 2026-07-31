@@ -10,10 +10,18 @@ import HubCore
 public struct ClaudeSessionReader: Sendable {
     public let directory: URL
 
-    public init(directory: URL? = nil) {
+    /// 是否要求对应进程还活着。
+    ///
+    /// 生产必须为 true —— 目录里残留着好几天前已退出进程的 json，不过滤
+    /// 岛上就会显示一堆幽灵会话。**只有演示模式**（合成数据，进程当然不存在）
+    /// 才关掉它。
+    public let requiresLiveProcess: Bool
+
+    public init(directory: URL? = nil, requiresLiveProcess: Bool = true) {
         self.directory = directory ?? FileManager.default
             .homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/sessions", isDirectory: true)
+        self.requiresLiveProcess = requiresLiveProcess
     }
 
     /// 读取全部存活会话。
@@ -39,7 +47,7 @@ public struct ClaudeSessionReader: Sendable {
         for file in files where file.pathExtension == "json" {
             guard let data = try? Data(contentsOf: file),
                   let session = AgentSession.decode(from: data),
-                  isAlive(session.pid)
+                  !requiresLiveProcess || isAlive(session.pid)
             else { continue }
 
             // 同一 sessionId 可能有多个 PID 文件（resume 后旧进程的 json 尚未清理，

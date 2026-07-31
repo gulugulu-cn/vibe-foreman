@@ -50,11 +50,20 @@ public final class HubNotificationCenter: NSObject, UNUserNotificationCenterDele
         }
     }
 
+    /// - Parameter distinctBy: 给 identifier 加的后缀。
+    ///
+    ///   默认（nil）时同一会话共用一个 id，新通知**静默替换**旧的 ——
+    ///   这对"跑得快的会话刷屏"是对的。
+    ///
+    ///   但静默替换意味着**不会重新弹横幅**，而滞留提醒升级到第三轮时
+    ///   恰恰需要重新弹一次（用户前两次就是没看到才升级的）。
+    ///   那种场合传一个不同的后缀，让系统当成一条新通知。
     public func post(
         title: String,
         body: String,
         sessionId: String,
-        sound: Bool = true
+        sound: Bool = true,
+        distinctBy: String? = nil
     ) {
         let content = UNMutableNotificationContent()
         content.title = title
@@ -62,11 +71,9 @@ public final class HubNotificationCenter: NSObject, UNUserNotificationCenterDele
         content.userInfo = [Self.sessionIdKey: sessionId]
         if sound { content.sound = .default }
 
-        // 同一会话的通知用固定 identifier，新的会替换旧的。
-        // 否则一个跑得快的会话能在通知中心堆几十条，用户直接全部划掉，
-        // 那真正重要的那条也就跟着没了。
+        let suffix = distinctBy.map { ".\($0)" } ?? ""
         let request = UNNotificationRequest(
-            identifier: "hub.session.\(sessionId)",
+            identifier: "hub.session.\(sessionId)\(suffix)",
             content: content,
             trigger: nil
         )

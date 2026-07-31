@@ -70,6 +70,10 @@ public enum IslandTheme {
         case .expanded: (0.28, 0.20)
         case .intrusion: (0.16, 0.08)
         case .approval: (0.34, 0.26)
+        // nudge 上是小人和短标签，密集文字不多，压太狠反而让像素画发灰。
+        case .nudge: (0.18, 0.10)
+        // answer 要读一整句问题，按展开态那一档压。
+        case .answer: (0.30, 0.22)
         }
         return LinearGradient(
             colors: [.black.opacity(top), .black.opacity(bottom)],
