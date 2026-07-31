@@ -1,21 +1,50 @@
-MIT License
-
+Claude Hub 使用条款
 Copyright (c) 2026 gulugulu-cn
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+本仓库里是**应用和文档**，不含源代码。所以这里分两部分说明，
+而不是套一个源码许可证 —— 那会承诺一些这里给不了的东西。
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+一、应用本体
+   （Releases 里的 Claude Hub.app、hubctl 及随包的二进制）
+
+免费。任何个人或组织都可以自由使用、在自己的机器上安装、在公司内部部署，
+不需要付费，也不需要通知作者。商业环境里用也一样。
+
+可以原样转发安装包。转发时请指向本仓库，好让别人拿到更新和校验和。
+
+不提供源代码，也不授予反编译、逆向或再分发修改版的权利。
+
+应用按「原样」提供，不含任何明示或默示的担保，包括但不限于适销性、
+特定用途适用性和不侵权的担保。作者不对使用本应用产生的任何索赔、
+损害或其它责任负责。
+
+需要特别说明：本应用会读取本机的会话状态文件；启用「AI 摘要」时，
+它会把最后一条回复的正文交给你本机已登录的 Claude Code 处理。
+这一层可以关闭。是否启用由你决定，作者不承担由此产生的任何后果。
+
+
+二、文档与截图
+   （本仓库的 README.md 与 docs/ 目录）
+
+采用 CC BY 4.0（署名 4.0 国际）：
+https://creativecommons.org/licenses/by/4.0/deed.zh
+
+可以自由引用、转载、翻译、改写，用于任何目的（含商业），
+只需注明出处并指明是否做过修改。
+
+
+────────────────────────────────────────────────────────────
+
+English summary
+
+This repository contains an application and its documentation; it does
+not contain source code. Two separate terms therefore apply:
+
+1. The application (binaries in Releases) — free to use for any purpose,
+   personal or commercial. Redistribution of the unmodified package is
+   permitted; please link back to this repository. No source is provided
+   and no right to reverse engineer or redistribute modified versions is
+   granted. Provided "AS IS", without warranty of any kind.
+
+2. Documentation and screenshots (README.md and docs/) — CC BY 4.0.
