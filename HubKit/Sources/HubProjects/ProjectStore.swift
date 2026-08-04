@@ -10,6 +10,10 @@ public final class ProjectStore {
     public private(set) var gitInfo: [String: GitInfo] = [:]   // key = expandedPath
     public private(set) var isScanning = false
 
+    /// 置顶的项目。key = `Project.id`（yaml 里的 path 原文，含 `~`），
+    /// 这样 yaml 重载、项目暂时消失再回来，置顶都不丢。
+    public private(set) var pinned: Set<String> = []
+
     /// 实际读到的那个文件。
     ///
     /// **必须对外可见。** 这次的坑就是"不知道 app 在读哪份 projects.yaml" ——
@@ -26,8 +30,54 @@ public final class ProjectStore {
     /// cwd → 项目名 的反查表。hook 事件只带 cwd，要靠它换成用户认识的项目名。
     private var pathIndex: [String: String] = [:]
 
-    public init(yamlURL: URL? = nil) {
+    /// 置顶状态的落盘位置。和 approval-log.json 一样放 Application Support。
+    public static var defaultPinURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/claude-hub/pinned.json")
+    }
+
+    /// nil = 不落盘。必须可注入，理由同 ApprovalCoordinator.logURL：
+    /// 路径写死会让测试直接污染用户的真实数据。
+    private let pinURL: URL?
+
+    public init(yamlURL: URL? = nil, pinURL: URL? = ProjectStore.defaultPinURL) {
         self.explicitURL = yamlURL
+        self.pinURL = pinURL
+        loadPins()
+    }
+
+    // MARK: - 置顶
+
+    public func isPinned(_ project: Project) -> Bool {
+        pinned.contains(project.id)
+    }
+
+    public func togglePin(_ project: Project) {
+        if pinned.contains(project.id) {
+            pinned.remove(project.id)
+        } else {
+            pinned.insert(project.id)
+        }
+        persistPins()
+    }
+
+    private func loadPins() {
+        guard let pinURL,
+              let data = try? Data(contentsOf: pinURL),
+              let decoded = try? JSONDecoder().decode([String].self, from: data)
+        else { return }
+        pinned = Set(decoded)
+    }
+
+    /// 不清理已消失项目的 pin：项目可能只是暂时从 yaml 移走，脏数据无害且量极小。
+    private func persistPins() {
+        guard let pinURL else { return }
+        try? FileManager.default.createDirectory(
+            at: pinURL.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        // sorted 保证写盘内容稳定，diff 友好。
+        guard let data = try? JSONEncoder().encode(pinned.sorted()) else { return }
+        try? data.write(to: pinURL, options: .atomic)
     }
 
     // MARK: - 加载

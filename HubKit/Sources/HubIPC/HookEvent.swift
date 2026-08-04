@@ -51,6 +51,10 @@ public struct HookEvent: Codable, Sendable {
     /// Bash 取 command，Write/Edit 取 file_path，WebFetch 取 url。
     public let toolSummary: String?
     public let toolUseId: String?
+    /// 完整 tool_input 的 JSON 原文。只有交互类工具（AskUserQuestion /
+    /// ExitPlanMode）才带 —— 岛上要把真实的问题和选项渲染出来，
+    /// 一行 summary 不够用。其余工具仍然只传 toolSummary，别撑爆行协议。
+    public let toolInputJSON: String?
 
     // MARK: hubctl 补充的环境信息
 
@@ -73,6 +77,7 @@ public struct HookEvent: Codable, Sendable {
         toolName: String? = nil,
         toolSummary: String? = nil,
         toolUseId: String? = nil,
+        toolInputJSON: String? = nil,
         tmuxPane: String? = nil,
         clientPid: Int32? = nil
     ) {
@@ -89,6 +94,7 @@ public struct HookEvent: Codable, Sendable {
         self.toolName = toolName
         self.toolSummary = toolSummary
         self.toolUseId = toolUseId
+        self.toolInputJSON = toolInputJSON
         self.tmuxPane = tmuxPane
         self.clientPid = clientPid
     }
@@ -111,13 +117,38 @@ public struct HookDecision: Codable, Sendable {
     public let verdict: Verdict
     public let reason: String?
 
-    public init(verdict: Verdict, reason: String? = nil) {
+    /// true = 要求 hubctl **显式输出** `permissionDecision: "allow"`。
+    ///
+    /// 现状的 allow 是"什么都不输出"= 交回 Claude 自己的权限流程（终端里
+    /// 该弹的确认框照弹）。但岛上「批准计划」需要的是真放行 —— 只有显式
+    /// 输出 allow，ExitPlanMode 才会跳过终端确认直接执行。
+    /// nil / false 维持现状语义。
+    public let explicitAllow: Bool?
+
+    public init(verdict: Verdict, reason: String? = nil, explicitAllow: Bool? = nil) {
         self.verdict = verdict
         self.reason = reason
+        self.explicitAllow = explicitAllow
     }
 
     /// 放行。Hub 没运行、超时以外的异常、非高风险操作都走这个。
     public static let allow = HookDecision(verdict: .allow)
+
+    /// PreToolUse 应答的 stdout 内容（已查证官方文档的格式）。
+    /// nil = 什么都不输出 = 交回 Claude 正常权限流程。
+    /// 放在这里而不是 hubctl 里，是为了让"什么情况输出什么"可测。
+    public func hookOutputJSON() -> String? {
+        if verdict == .allow, explicitAllow != true { return nil }
+        let output: [String: Any] = [
+            "hookSpecificOutput": [
+                "hookEventName": "PreToolUse",
+                "permissionDecision": verdict.rawValue,
+                "permissionDecisionReason": reason ?? "被 Claude Hub 拦截",
+            ],
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: output) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
 }
 
 /// socket 路径。

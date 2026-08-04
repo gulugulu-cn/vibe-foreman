@@ -16,6 +16,7 @@ public final class IslandController {
 
     private let store: SessionStore
     private let approvals: ApprovalCoordinator
+    private let prompts: AgentPromptCoordinator
     private let projects: ProjectStore
     private let model = IslandModel()
 
@@ -57,10 +58,12 @@ public final class IslandController {
     public init(
         store: SessionStore,
         approvals: ApprovalCoordinator,
+        prompts: AgentPromptCoordinator,
         projects: ProjectStore
     ) {
         self.store = store
         self.approvals = approvals
+        self.prompts = prompts
         self.projects = projects
     }
 
@@ -179,6 +182,7 @@ public final class IslandController {
             IslandRootView(
                 store: store,
                 approvals: approvals,
+                prompts: prompts,
                 projects: projects,
                 model: model,
                 geometry: geo,
@@ -188,7 +192,10 @@ public final class IslandController {
                 onCollapse: { [weak self] in self?.collapse() },
                 onLaunch: { [weak self] project, mode in self?.onLaunch?(project, mode) },
                 onPickStalled: { [weak self] finding in self?.pickStalled(finding) },
-                onReply: { [weak self] text in self?.sendReply(text) }
+                onReply: { [weak self] text in self?.sendReply(text) },
+                onDialogKey: { [weak self] request, key in
+                    self?.pressDialogKey(request, key: key)
+                }
             )
         )
     }
@@ -550,8 +557,9 @@ public final class IslandController {
 
     /// 事件闯入：短暂膨胀提示，几秒后回落到原来的形态。
     public func presentIntrusion(_ event: IntrusionEvent) {
-        // 审批优先级最高，不能被普通事件挤掉。
-        guard model.state != .approval else { return }
+        // 审批优先级最高，不能被普通事件挤掉；交互卡背后有 hook 阻塞在等，
+        // 同样不能被一条两秒的横幅顶掉。
+        guard model.state != .approval, model.state != .prompt else { return }
 
         intrusionDismissTask?.cancel()
         if model.state != .intrusion { stateBeforeIntrusion = model.state }
@@ -729,7 +737,88 @@ public final class IslandController {
         guard model.state == .approval, approvals.current == nil else { return }
         removeKeyMonitor()
         panel?.resignKey()
-        setState(.rest)
+        // 审批清完了，如果还有交互卡压在队里，接着弹它。
+        if prompts.current != nil {
+            setState(.prompt)
+        } else {
+            setState(.rest)
+        }
+    }
+
+    // MARK: - 交互作答（选择题 / 计划审批）
+
+    /// 弹出交互作答卡。**不会自动回落**，收回由 coordinator 的超时驱动。
+    ///
+    /// 当前是审批态时**不抢**：审批是安全刹车，优先级更高；
+    /// 交互请求的 continuation 还挂在队列里，`dismissApprovalIfDone` /
+    /// `dismissPromptIfDone` 的轮询会在审批清完后把它带出来。
+    public func presentPrompt() {
+        guard model.state != .approval else { return }
+        intrusionDismissTask?.cancel()
+        model.intrusion = nil
+        removeOutsideClickMonitor()
+        setState(.prompt)
+    }
+
+    /// 队列空了就收回；反过来，如果岛闲着而队列里有货，把它浮出来。
+    public func dismissPromptIfDone() {
+        // 权限卡对应的终端对话框可能已经被用户在那边亲手答掉了 ——
+        // 会话恢复干活（或直接消失）就把卡收走，别让人对着空气点「允许」。
+        // 3 秒宽限：通知刚到时 store 的状态快照可能还停留在 busy。
+        if let current = prompts.current,
+           case .permission = current.payload,
+           Date().timeIntervalSince(current.createdAt) > 3 {
+            let session = store.sessions.first { $0.sessionId == current.sessionId }
+            if session == nil || session?.status.isWorking == true {
+                prompts.dismiss(current)
+            }
+        }
+
+        if model.state == .prompt, prompts.current == nil {
+            setState(.rest)
+            return
+        }
+        if model.state == .rest || model.state == .hover, prompts.current != nil {
+            presentPrompt()
+        }
+    }
+
+    /// 在对应终端的对话框里替用户按一个键。权限框、计划确认框共用。
+    ///
+    /// 先收卡再发键（对阻塞卡收卡即放行 —— 计划确认框恰恰要先放行才会弹出：
+    /// 实测 2.1.220 里 ExitPlanMode 的计划框属于 plan 状态机自己的 UI，
+    /// hook 的显式 allow 压不掉它，只能放行后到框里去按键）。
+    ///
+    /// 带重试：放行到对话框渲染出来有一两秒窗口，期间会话还是 busy，
+    /// `press` 的护栏会拒发（正确！），等一秒再试。到点还没等到就跳转
+    /// 让用户自己按 —— 框还在终端里，什么都没损失。
+    public func pressDialogKey(_ request: AgentPromptRequest, key: TerminalReply.DialogKey) {
+        prompts.dismiss(request)
+        let reply = self.reply
+        let sessionId = request.sessionId
+        Task { [weak self] in
+            for attempt in 0..<6 {
+                try? await Task.sleep(for: .milliseconds(attempt == 0 ? 600 : 1000))
+                let outcome = await reply.press(key, sessionId: sessionId)
+                switch outcome {
+                case .sent:
+                    return
+                case .sessionBecameBusy:
+                    // 对话框还没渲染出来（Claude 还在跑）。继续等。
+                    continue
+                case .notLocated, .rejected, .failed:
+                    await MainActor.run {
+                        HubLog.jump.error("对话框按键未送达，跳转让用户自己按")
+                        self?.store.jump(to: sessionId)
+                    }
+                    return
+                }
+            }
+            await MainActor.run {
+                HubLog.jump.error("等不到对话框出现，跳转让用户自己按")
+                self?.store.jump(to: sessionId)
+            }
+        }
     }
 
     /// 审批态的键盘兜底。

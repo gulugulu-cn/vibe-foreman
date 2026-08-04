@@ -22,6 +22,10 @@ public enum IslandState: Equatable, Sendable {
     case nudge
     /// 岛上应答。显示 AI 的问题和快捷回答，**不会自动回落**。
     case answer
+    /// 交互作答。Claude 主动发起的选择题（AskUserQuestion）或计划审批
+    /// （ExitPlanMode），hook 阻塞等着结果。**不会自动回落** ——
+    /// 收回由 AgentPromptCoordinator 的超时（到点交还终端）驱动。
+    case prompt
 }
 
 /// 某个形态在某块屏幕上的具体尺寸。
@@ -211,6 +215,10 @@ public struct IslandMetrics: Equatable, Sendable {
                 return IslandMetrics(
                     bodyWidth: 460, bodyHeight: answerContentHeight, bottomRadius: 26
                 )
+            case .prompt:
+                return IslandMetrics(
+                    bodyWidth: 470, bodyHeight: promptContentHeight, bottomRadius: 26
+                )
             }
         } else {
             // 无刘海：折叠态是个独立胶囊，不是"半个下唇"。
@@ -238,6 +246,10 @@ public struct IslandMetrics: Equatable, Sendable {
             case .answer:
                 return IslandMetrics(
                     bodyWidth: 460, bodyHeight: answerContentHeight, bottomRadius: 24
+                )
+            case .prompt:
+                return IslandMetrics(
+                    bodyWidth: 470, bodyHeight: promptContentHeight, bottomRadius: 24
                 )
             }
         }
@@ -270,6 +282,13 @@ public struct IslandMetrics: Equatable, Sendable {
 
     /// 审批态内容的最小高度（header + 命令块 + 按钮 + 上下留白）。
     public static let approvalContentHeight: CGFloat = 48 + 84 + 44 + 24 + 20
+
+    // MARK: - 交互作答态几何
+
+    /// 交互作答态固定高度。三种载荷（选择题 / 计划 / 降级提示）共用一个
+    /// 高度，切换或排队推进时岛不跳。内容超出的部分（长计划、多选项）
+    /// 在卡片内部滚动。
+    public static let promptContentHeight: CGFloat = 300
 }
 
 /// 形态转场动画。
@@ -320,6 +339,10 @@ public enum IslandAnimation {
         case (_, .approval):
             return .spring(response: 0.32, dampingFraction: 0.72)
         case (.approval, _):
+            return .smooth(duration: 0.30)
+        case (_, .prompt):
+            return .spring(response: 0.32, dampingFraction: 0.72)
+        case (.prompt, _):
             return .smooth(duration: 0.30)
         default:
             return .smooth(duration: 0.26)

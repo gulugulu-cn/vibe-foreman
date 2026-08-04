@@ -16,6 +16,7 @@ public struct IslandRootView: View {
 
     private let store: SessionStore
     private let approvals: ApprovalCoordinator
+    private let prompts: AgentPromptCoordinator
     private let projects: ProjectStore
     private let model: IslandModel
     private let geometry: NotchGeometry
@@ -26,12 +27,14 @@ public struct IslandRootView: View {
     private let onLaunch: (Project, LaunchMode) -> Void
     private let onPickStalled: (StallFinding) -> Void
     private let onReply: (String) -> Void
+    private let onDialogKey: (AgentPromptRequest, TerminalReply.DialogKey) -> Void
 
     @Namespace private var glassNamespace
 
     public init(
         store: SessionStore,
         approvals: ApprovalCoordinator,
+        prompts: AgentPromptCoordinator,
         projects: ProjectStore,
         model: IslandModel,
         geometry: NotchGeometry,
@@ -41,12 +44,15 @@ public struct IslandRootView: View {
         onCollapse: @escaping () -> Void,
         onLaunch: @escaping (Project, LaunchMode) -> Void,
         onPickStalled: @escaping (StallFinding) -> Void = { _ in },
-        onReply: @escaping (String) -> Void = { _ in }
+        onReply: @escaping (String) -> Void = { _ in },
+        onDialogKey: @escaping (AgentPromptRequest, TerminalReply.DialogKey) -> Void = { _, _ in }
     ) {
         self.onPickStalled = onPickStalled
         self.onReply = onReply
+        self.onDialogKey = onDialogKey
         self.store = store
         self.approvals = approvals
+        self.prompts = prompts
         self.projects = projects
         self.model = model
         self.geometry = geometry
@@ -308,6 +314,34 @@ public struct IslandRootView: View {
                     onClearFeedback: { model.answerFeedback = nil }
                 )
             }
+        case .prompt:
+            if let request = prompts.current {
+                AgentPromptContent(
+                    request: request,
+                    queueCount: prompts.queue.count,
+                    onSubmitAnswers: { prompts.submitAnswers(request, answers: $0) },
+                    onChoose: { prompts.choose(request, option: $0) },
+                    // 计划确认框吃不下 hook 的显式 allow（见 pressDialogKey 注释），
+                    // 批准 = 放行后替用户在终端框里按 1 / 2。驳回走 hook deny 有效。
+                    onApprovePlanKey: { onDialogKey(request, .digit($0)) },
+                    onRejectPlan: { prompts.rejectPlan(request) },
+                    onApproveEnterPlan: { onDialogKey(request, .digit(1)) },
+                    onRejectEnterPlan: { prompts.rejectEnterPlan(request) },
+                    onAllowPermission: { onDialogKey(request, .digit(1)) },
+                    onDenyPermission: { onDialogKey(request, .escape) },
+                    onGoToTerminal: {
+                        // 先放行（终端原生框接管），再跳过去。找不到会话就只放行 ——
+                        // 用户至少还能自己切窗口，原生框已经在等他了。
+                        prompts.passthrough(request)
+                        if let session = store.sessions.first(
+                            where: { $0.sessionId == request.sessionId }
+                        ) { onFocus(session) }
+                    }
+                )
+                // 换卡必须重置多题表单的 @State（进度、已选答案），
+                // 否则上一张卡答到第 2 题，下一张卡会从第 2 题开始。
+                .id(request.id)
+            }
         }
     }
 
@@ -323,6 +357,8 @@ public struct IslandRootView: View {
                 : IslandTheme.waiting.opacity(0.24)
         case .nudge, .answer:
             return StallPalette.color(for: model.topStallReason).opacity(0.24)
+        case .prompt:
+            return IslandTheme.waiting.opacity(0.24)
         default:
             // 折叠态：有东西卡着就整条下唇染色。
             // 这一层不呼吸（呼吸交给 RestContent 里的那条），它只负责底色。
@@ -939,7 +975,7 @@ struct ExpandedContent: View {
 /// 在这之前，想开一个还没在跑的项目必须：点菜单栏 → 开主窗口 → 找到项目 → 启动。
 /// 而这是这个工具最高频的动作。
 ///
-/// 排序：**有会话在跑的排前面**（点它多半是想切过去），其余按名字。
+/// 排序：**置顶 > 有会话在跑 > 名字**（口径见 ProjectOrdering.islandOrder）。
 /// 不做搜索框：岛的 panel 基本不是 key window，文本框拿不到键盘焦点，
 /// 放一个点不动的搜索框比没有更糟。要搜索去主窗口。
 struct ProjectListContent: View {
@@ -955,12 +991,12 @@ struct ProjectListContent: View {
     }
 
     private var ordered: [Project] {
-        projects.projects.sorted { lhs, rhs in
-            let l = sessions(of: lhs).count
-            let r = sessions(of: rhs).count
-            if (l > 0) != (r > 0) { return l > 0 }
-            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
-        }
+        ProjectOrdering.islandOrder(
+            projects.projects,
+            pinned: projects.pinned,
+            runningCount: { sessions(of: $0).count },
+            lastCommitAt: { projects.git(for: $0)?.lastCommitAt }
+        )
     }
 
     var body: some View {
@@ -975,8 +1011,10 @@ struct ProjectListContent: View {
                                 project: project,
                                 running: sessions(of: project),
                                 git: projects.git(for: project),
+                                isPinned: projects.isPinned(project),
                                 onOpen: { open(project) },
-                                onLaunch: { onLaunch(project, $0) }
+                                onLaunch: { onLaunch(project, $0) },
+                                onTogglePin: { projects.togglePin(project) }
                             )
                         }
                     }
@@ -1022,12 +1060,19 @@ struct ProjectListContent: View {
 }
 
 /// 项目列表的一行。
+///
+/// 点击行为分两种：
+/// - 有会话在跑：点整行跳过去（这是最高频的动作，不能多一步）。
+/// - 没有会话：点整行**弹启动菜单**而不是直接起 claude ——
+///   "点一下就启动了一个 Claude Code" 的误触成本太高。
 struct ProjectRowView: View {
     let project: Project
     let running: [AgentSession]
     let git: GitInfo?
+    let isPinned: Bool
     let onOpen: () -> Void
     let onLaunch: (LaunchMode) -> Void
+    let onTogglePin: () -> Void
 
     @State private var isHovered = false
 
@@ -1037,6 +1082,33 @@ struct ProjectRowView: View {
     }
 
     var body: some View {
+        rowBody
+            .contentShape(Rectangle())
+            .onTapGesture {
+                // 有会话：跳过去。无会话：在鼠标位置弹原生启动菜单 ——
+                // SwiftUI Menu 的两种整行方案都在 macOS 上翻过车
+                // （label 被压扁 / 透明盖层收不到点击），见 RowMenu 注释。
+                if running.isEmpty {
+                    presentLaunchMenu()
+                } else {
+                    onOpen()
+                }
+            }
+            .onHover { isHovered = $0 }
+            .help(project.expandedPath)
+    }
+
+    /// 启动菜单：LaunchMode 全集 + 置顶。整行点击和 "..." 共用。
+    private func presentLaunchMenu() {
+        var items: [RowMenu.Item?] = LaunchMode.allCases
+            .filter { $0 != .resumeSession }
+            .map { mode in RowMenu.Item(mode.label) { onLaunch(mode) } }
+        items.append(nil)
+        items.append(RowMenu.Item(isPinned ? "取消置顶" : "置顶", action: onTogglePin))
+        RowMenu.present(items)
+    }
+
+    private var rowBody: some View {
         HStack(spacing: 0) {
             RoundedRectangle(cornerRadius: 1, style: .continuous)
                 .fill(status.map(IslandTheme.color(for:)) ?? .white.opacity(0.14))
@@ -1061,6 +1133,12 @@ struct ProjectRowView: View {
                         .font(IslandTheme.label(13, .semibold))
                         .foregroundStyle(.white.opacity(running.isEmpty ? 0.78 : 1))
                         .lineLimit(1)
+                    if isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .rotationEffect(.degrees(45))
+                    }
                     if running.count > 0 {
                         Text("\(running.count) 个会话")
                             .font(IslandTheme.label(10, .medium))
@@ -1086,24 +1164,15 @@ struct ProjectRowView: View {
 
             Spacer(minLength: 8)
 
-            // 启动模式菜单。默认动作（点整行）已经覆盖了绝大多数情况，
-            // 这里给的是"我要换一种开法"——继续上次会话、跳过权限、只开终端等等。
-            Menu {
-                ForEach(LaunchMode.allCases, id: \.self) { mode in
-                    if mode != .resumeSession {
-                        Button(mode.label) { onLaunch(mode) }
-                    }
-                }
+            // "..." = 启动菜单（继续上次、跳过权限、置顶等）。
+            // 有会话的行点整行是跳会话，这里是"换一种开法"的入口；
+            // 无会话的行点整行和点这里等价。
+            Button {
+                presentLaunchMenu()
             } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.7))
-                    .frame(width: 26, height: 22)
-                    .contentShape(Rectangle())
+                ellipsisIcon
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
+            .buttonStyle(.plain)
             .opacity(isHovered ? 1 : 0.3)
             .padding(.trailing, 8)
         }
@@ -1113,9 +1182,14 @@ struct ProjectRowView: View {
                 .fill(.white.opacity(isHovered ? 0.08 : 0.028))
         }
         .contentShape(Rectangle())
-        .onTapGesture(perform: onOpen)
-        .onHover { isHovered = $0 }
-        .help(project.expandedPath)
+    }
+
+    private var ellipsisIcon: some View {
+        Image(systemName: "ellipsis")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.7))
+            .frame(width: 26, height: 22)
+            .contentShape(Rectangle())
     }
 }
 

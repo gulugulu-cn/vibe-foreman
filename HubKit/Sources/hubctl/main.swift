@@ -39,9 +39,19 @@ private func makeEvent(kind: HookEvent.Kind, payload: [String: Any]) -> HookEven
     let env = ProcessInfo.processInfo.environment
 
     var toolSummary: String?
+    var toolInputJSON: String?
     if let toolName = string(payload, "tool_name"),
        let input = payload["tool_input"] as? [String: Any] {
         toolSummary = RiskClassifier.summarize(toolName: toolName, input: input)
+
+        // 交互类工具（选择题 / 计划审批）要把完整 tool_input 带给岛上渲染。
+        // 上限 256KB：socket 是单行协议（1MB 上限），一份超长 plan 不值得
+        // 把整条链路撑爆 —— 超限就不带，服务端会降级成"去终端回答"。
+        if AgentPromptPayload.interactiveTools.contains(toolName),
+           let data = try? JSONSerialization.data(withJSONObject: input),
+           data.count <= 262_144 {
+            toolInputJSON = String(data: data, encoding: .utf8)
+        }
     }
 
     return HookEvent(
@@ -58,6 +68,7 @@ private func makeEvent(kind: HookEvent.Kind, payload: [String: Any]) -> HookEven
         toolName: string(payload, "tool_name"),
         toolSummary: toolSummary,
         toolUseId: string(payload, "tool_use_id"),
+        toolInputJSON: toolInputJSON,
         // $TMUX_PANE 是 tmux 注入到每个 pane 环境里的 pane id。
         // 旧实现用 `tmux display-message -p '#W'` 且没带 -t，拿的是当前 active
         // 窗口而不是自己所在的窗口 —— 用户切个 tab 就归错项目了。读环境变量没这个问题。
@@ -66,20 +77,9 @@ private func makeEvent(kind: HookEvent.Kind, payload: [String: Any]) -> HookEven
     )
 }
 
-/// PreToolUse 的应答格式（已查证官方文档）。
-/// 什么都不输出等于默认放行，所以只在 deny 时才需要写。
+/// PreToolUse 的应答。输出什么、什么时候不输出，见 `HookDecision.hookOutputJSON()`。
 private func emitDecision(_ decision: HookDecision) {
-    guard decision.verdict != .allow else { return }
-
-    let output: [String: Any] = [
-        "hookSpecificOutput": [
-            "hookEventName": "PreToolUse",
-            "permissionDecision": decision.verdict.rawValue,
-            "permissionDecisionReason": decision.reason ?? "被 Claude Hub 拦截",
-        ],
-    ]
-    if let data = try? JSONSerialization.data(withJSONObject: output),
-       let text = String(data: data, encoding: .utf8) {
+    if let text = decision.hookOutputJSON() {
         print(text)
     }
 }

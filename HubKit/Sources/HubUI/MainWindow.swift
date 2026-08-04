@@ -43,6 +43,9 @@ public struct MainWindowView: View {
 
     @State private var section: DashboardSection = .sessions
     @State private var search = ""
+    /// Git 账号/仓库列表。挂在窗口这一层：克隆表单每次打开复用同一份数据
+    /// （带磁盘缓存），只做后台静默刷新，不再让用户每次干等加载。
+    @State private var git = GitAccountStore()
 
     public init(
         store: SessionStore,
@@ -79,13 +82,13 @@ public struct MainWindowView: View {
         case .sessions:
             SessionsPane(store: store, projects: projects, onJump: onJump)
         case .projects:
-            ProjectsPane(projects: projects, store: store, onLaunch: onLaunch)
+            ProjectsPane(projects: projects, store: store, git: git, onLaunch: onLaunch)
         case .usage:
             UsagePane()
         case .approvals:
             ApprovalLogPane(approvals: approvals)
         case .settings:
-            SettingsPane(approvals: approvals, projects: projects)
+            SettingsPane(approvals: approvals, projects: projects, git: git)
         }
     }
 }
@@ -253,19 +256,34 @@ struct SessionsPane: View {
 struct ProjectsPane: View {
     let projects: ProjectStore
     let store: SessionStore
+    let git: GitAccountStore
     let onLaunch: (Project, LaunchMode) -> Void
 
     @State private var search = ""
+    @State private var showNewProject = false
+    @State private var showClone = false
 
     private var filtered: [Project] {
-        guard !search.isEmpty else { return projects.projects }
-        let needle = search.lowercased()
-        return projects.projects.filter {
-            $0.name.lowercased().contains(needle)
-                || $0.path.lowercased().contains(needle)
-                || $0.aliases.contains { $0.lowercased().contains(needle) }
-                || ($0.description?.lowercased().contains(needle) ?? false)
+        let base: [Project]
+        if search.isEmpty {
+            base = projects.projects
+        } else {
+            let needle = search.lowercased()
+            base = projects.projects.filter {
+                $0.name.lowercased().contains(needle)
+                    || $0.path.lowercased().contains(needle)
+                    || $0.aliases.contains { $0.lowercased().contains(needle) }
+                    || ($0.description?.lowercased().contains(needle) ?? false)
+            }
         }
+        // 置顶 > 正在开发 > 最近提交 > 名字。38 个项目按 yaml 顺序排的话，
+        // 找一个要翻半屏 —— 而人真正会回去的就是在跑的和最近动过的那几个。
+        return ProjectOrdering.rank(
+            base,
+            pinned: projects.pinned,
+            runningCount: { runningCount($0) },
+            lastCommitAt: { projects.git(for: $0)?.lastCommitAt }
+        )
     }
 
     /// 这个项目下有没有正在跑的会话。
@@ -282,6 +300,16 @@ struct ProjectsPane: View {
                 TextField("搜索项目…", text: $search)
                     .textFieldStyle(.roundedBorder)
                 Button {
+                    showNewProject = true
+                } label: {
+                    Label("新建", systemImage: "plus")
+                }
+                Button {
+                    showClone = true
+                } label: {
+                    Label("克隆", systemImage: "arrow.down.circle")
+                }
+                Button {
                     projects.scan()
                 } label: {
                     Label("扫描", systemImage: "arrow.clockwise")
@@ -290,6 +318,12 @@ struct ProjectsPane: View {
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
+            .sheet(isPresented: $showNewProject) {
+                NewProjectSheet(projects: projects)
+            }
+            .sheet(isPresented: $showClone) {
+                CloneProjectSheet(projects: projects, git: git)
+            }
 
             if projects.projects.isEmpty {
                 emptyState
@@ -311,6 +345,12 @@ struct ProjectsPane: View {
                                         Text(project.name)
                                             .font(.system(size: 14, weight: .semibold,
                                                           design: .rounded))
+                                        if projects.isPinned(project) {
+                                            Image(systemName: "pin.fill")
+                                                .font(.system(size: 9))
+                                                .foregroundStyle(.secondary)
+                                                .rotationEffect(.degrees(45))
+                                        }
                                         if runningCount(project) > 0 {
                                             Text("\(runningCount(project)) 个会话")
                                                 .font(.system(size: 10))
@@ -337,6 +377,10 @@ struct ProjectsPane: View {
                                         if mode != .resumeSession {
                                             Button(mode.label) { onLaunch(project, mode) }
                                         }
+                                    }
+                                    Divider()
+                                    Button(projects.isPinned(project) ? "取消置顶" : "置顶") {
+                                        projects.togglePin(project)
                                     }
                                 } label: {
                                     Image(systemName: "play.circle")
@@ -617,6 +661,7 @@ struct ApprovalLogPane: View {
 struct SettingsPane: View {
     @Bindable var approvals: ApprovalCoordinator
     let projects: ProjectStore
+    let git: GitAccountStore
 
     @State private var hookStatus: String = "检查中…"
 
@@ -645,6 +690,67 @@ struct SettingsPane: View {
                             .fixedSize(horizontal: false, vertical: true)
                         }
                     }
+
+                    Card {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Git 账号").font(.system(size: 14, weight: .semibold))
+                                Spacer()
+                                Button {
+                                    git.refresh()
+                                } label: {
+                                    Image(systemName: "arrow.clockwise")
+                                }
+                                .disabled(git.isRefreshing)
+                            }
+
+                            if git.accounts.isEmpty {
+                                Text(git.diagnostic ?? (git.isRefreshing ? "检查中…" : "未检查"))
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(git.accounts) { account in
+                                    HStack(spacing: 6) {
+                                        Image(systemName: account.active
+                                            ? "person.crop.circle.badge.checkmark"
+                                            : "person.crop.circle")
+                                            .foregroundStyle(account.active ? .green : .secondary)
+                                        Text("\(account.login) · \(account.host)")
+                                            .font(.system(size: 12, design: .monospaced))
+                                        if account.active {
+                                            Text("当前")
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(.green)
+                                            if !git.repos.isEmpty {
+                                                Text("\(git.repos.count) 个仓库")
+                                                    .font(.system(size: 10))
+                                                    .foregroundStyle(.tertiary)
+                                            }
+                                        } else {
+                                            Button("切换到这个") { git.switchTo(account) }
+                                                .font(.system(size: 11))
+                                                .disabled(git.isSwitching || git.isRefreshing)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Text("克隆用的是标「当前」的那个账号的凭据 —— 拉另一个账号的私有仓要先切过去。新增账号在终端跑：")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                            HStack(spacing: 8) {
+                                Text("gh auth login")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(.tertiary)
+                                Button("复制命令") {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString("gh auth login", forType: .string)
+                                }
+                                .font(.system(size: 11))
+                            }
+                        }
+                    }
+                    .onAppear { git.refresh() }
 
                     Card {
                         VStack(alignment: .leading, spacing: 8) {

@@ -23,13 +23,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ? ProjectStore(yamlURL: DemoFixtures.projectsYAML)
         : ProjectStore()
     private let approvals = ApprovalCoordinator()
+    private let prompts = AgentPromptCoordinator()
     private let notifications = HubNotificationCenter()
 
     private lazy var island = IslandController(
-        store: store, approvals: approvals, projects: projects
+        store: store, approvals: approvals, prompts: prompts, projects: projects
     )
     private lazy var hooks = HookCoordinator(
-        store: store, approvals: approvals,
+        store: store, approvals: approvals, prompts: prompts,
         notifications: notifications, projects: projects
     )
     private lazy var dispatch = TerminalDispatch()
@@ -64,9 +65,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hooks.onApprovalNeeded = { [weak self] in
             self?.island.presentApproval()
         }
+        hooks.onPromptNeeded = { [weak self] in
+            self?.island.presentPrompt()
+        }
         hooks.start()
         // 清掉发起方已经死了的审批卡，见 ApprovalCoordinator.startOrphanSweep()。
         approvals.startOrphanSweep()
+        prompts.startOrphanSweep()
 
         // 岛上的「项目」栏可以直接启动 —— 「开发 xxx」是这个工具最高频的动作，
         // 不该要求先从菜单栏打开主窗口。
@@ -171,6 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stalls.stop()
         approvalObserver?.cancel()
         approvals.stopOrphanSweep()
+        prompts.stopOrphanSweep()
         hooks.stop()
         store.stop()
         projects.stopGitPolling()
@@ -187,6 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(250))
                 self?.island.dismissApprovalIfDone()
+                self?.island.dismissPromptIfDone()
             }
         }
     }

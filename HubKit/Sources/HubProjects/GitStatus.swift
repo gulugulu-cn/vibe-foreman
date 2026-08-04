@@ -15,10 +15,27 @@ public enum GitStatus {
             timeout: 5
         )
         guard result.succeeded else { return nil }
-        return parse(result.stdout)
+        return parse(result.stdout, lastCommitAt: lastCommitDate(at: path))
     }
 
-    static func parse(_ output: String) -> GitInfo {
+    /// 最后一次提交的时间。项目列表拿它排"最近在做的"。
+    ///
+    /// 多一次 fork，但实测 38 个仓库合计约 300ms（在后台队列上跑），
+    /// 换来的是「38 个项目里一眼找到在做的那个」——这个交换值得。
+    /// 空仓库（还没有任何提交）返回 nil。
+    static func lastCommitDate(at path: String) -> Date? {
+        let result = Shell.run(
+            "/usr/bin/git",
+            ["-C", path, "log", "-1", "--format=%ct"],
+            timeout: 5
+        )
+        guard result.succeeded,
+              let seconds = TimeInterval(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return nil }
+        return Date(timeIntervalSince1970: seconds)
+    }
+
+    static func parse(_ output: String, lastCommitAt: Date? = nil) -> GitInfo {
         var branch: String?
         var ahead = 0
         var behind = 0
@@ -48,7 +65,8 @@ public enum GitStatus {
 
         return GitInfo(
             branch: branch, changeCount: changes,
-            ahead: ahead, behind: behind, hasUpstream: hasUpstream
+            ahead: ahead, behind: behind, hasUpstream: hasUpstream,
+            lastCommitAt: lastCommitAt
         )
     }
 

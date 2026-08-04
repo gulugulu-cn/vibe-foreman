@@ -75,6 +75,125 @@ public struct TerminalReply {
         return .success(trimmed)
     }
 
+    /// 权限对话框能接受的按键。**白名单而不是任意字符串** ——
+    /// 这条链路绕过了 `sanitize` 的控制字符检查（Esc 本身就是控制字符），
+    /// 所以能发什么必须在类型层面钉死。
+    public enum DialogKey: Equatable, Sendable {
+        /// 数字选项（Claude Code 的权限框按数字直接选中）。
+        case digit(Int)
+        /// Esc = 取消 / 拒绝，所有对话框通用。
+        case escape
+
+        var tmuxKey: String {
+            switch self {
+            case .digit(let n): String(n)
+            case .escape: "Escape"
+            }
+        }
+
+        var rawText: String {
+            switch self {
+            case .digit(let n): String(n)
+            case .escape: String(UnicodeScalar(27))
+            }
+        }
+
+        public var label: String {
+            switch self {
+            case .digit(let n): "按键 \(n)"
+            case .escape: "Esc"
+            }
+        }
+    }
+
+    /// 往权限对话框发一个裸按键（不带回车）。
+    ///
+    /// 护栏与 `send` 相同：重读状态（变 busy = 用户已经自己答了，取消）、
+    /// PID 祖先链定位、定位不到就退化、留痕。
+    public func press(_ key: DialogKey, sessionId: String) async -> Outcome {
+        let reader = self.reader
+        let tmux = self.tmux
+        let iterm = self.iterm
+
+        return await Task.detached(priority: .userInitiated) {
+            Self.performPress(
+                key: key, sessionId: sessionId,
+                reader: reader, tmux: tmux, iterm: iterm
+            )
+        }.value
+    }
+
+    nonisolated static func performPress(
+        key: DialogKey,
+        sessionId: String,
+        reader: ClaudeSessionReader,
+        tmux: TmuxProbe,
+        iterm: ITermLocator
+    ) -> Outcome {
+        let sessions = reader.readAll()
+        guard let session = sessions.first(where: { $0.sessionId == sessionId }) else {
+            return .failed("会话已经不在了")
+        }
+        // 会话在干活 = 对话框已经被答掉了。这时候再发按键会打进输入框。
+        guard !session.status.isWorking else { return .sessionBecameBusy }
+
+        let tree = ProcessTree.snapshot()
+
+        if let pane = tmux.bindPanes(to: [session.pid], tree: tree)[session.pid] {
+            let result = Shell.run(
+                tmux.tmuxPath,
+                ["send-keys", "-t", pane.paneId, key.tmuxKey],
+                timeout: 5
+            )
+            guard result.succeeded else {
+                return .failed("tmux send-keys 失败：\(result.stderr)")
+            }
+            let target = "tmux · \(pane.sessionName):\(pane.windowName)"
+            log(text: key.label, sessionId: sessionId, target: target)
+            return .sent(target: target)
+        }
+
+        if ITermLocator.isRunning() {
+            let terms = iterm.snapshot()
+            let bound = JumpEngine.bind(
+                itermSessions: terms, claudeSessions: [session], tree: tree
+            )
+            if let uuid = bound[sessionId] {
+                // Esc 用 character id 27 拼进 AppleScript；`newline NO` 保证不带回车。
+                let payload: String
+                switch key {
+                case .digit(let n): payload = "\"\(n)\""
+                case .escape: payload = "(character id 27)"
+                }
+                let script = """
+                tell application "iTerm2"
+                    repeat with w in windows
+                        repeat with t in tabs of w
+                            repeat with s in sessions of t
+                                if id of s is "\(uuid)" then
+                                    tell s to write text \(payload) newline NO
+                                    return "ok"
+                                end if
+                            end repeat
+                        end repeat
+                    end repeat
+                end tell
+                return "missing"
+                """
+                let result = Shell.osascript(script, timeout: 8)
+                guard result.succeeded, result.stdout.contains("ok")
+                else { return .failed("iTerm 写入失败：\(result.stderr)") }
+
+                let name = terms.first { $0.sessionUUID == uuid }?.name ?? ""
+                let target = name.isEmpty ? "iTerm" : "iTerm · \(name)"
+                log(text: key.label, sessionId: sessionId, target: target)
+                return .sent(target: target)
+            }
+        }
+
+        return .notLocated
+    }
+
     /// 发送。**必须在后台线程调用它的 `perform`**，这里只做校验和取快照。
     public func send(text: String, to sessionId: String) async -> Outcome {
         let sanitized: String

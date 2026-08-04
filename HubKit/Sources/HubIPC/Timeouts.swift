@@ -25,6 +25,14 @@ public enum HookTimeouts {
     /// 用户在岛上决策的时限。到点自动拒绝。
     public static let userDecision: TimeInterval = 60
 
+    /// 交互卡（选择题 / 计划审批）上用户作答的时限。
+    ///
+    /// 到点**放行**而不是拒绝 —— 语义和 `userDecision` 相反：审批的超时
+    /// 默认值是安全刹车（deny），交互卡的超时是"把问题交还给终端的原生
+    /// 对话框"（不输出决策 = Claude 走正常权限流程，终端照常弹框）。
+    /// 阶梯约束相同：必须 < `serverBridge`，内层先到期。
+    public static let promptDecision: TimeInterval = 55
+
     /// 服务端等 UI 把结论送回来。
     public static let serverBridge: TimeInterval = 65
 

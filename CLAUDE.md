@@ -35,6 +35,7 @@ bash ~/Documents/code/claude-hub/scripts/setup-browser.sh
 | browser-auto | skills/browser-auto/SKILL.md | ✅ 符号链接 | 按需安装到各项目 .claude/skills/ |
 | tmux-hub | skills/tmux-hub/SKILL.md | ✅ | — |
 | lanhu-design-viewer | skills/lanhu-design-viewer/SKILL.md | ✅ | — |
+| new-project | skills/new-project/SKILL.md | ✅ | — |
 
 ### 给其他项目安装 skill
 
@@ -222,5 +223,6 @@ cat /tmp/hub-signals/$CHANNEL.result
 | "关掉 xxx" | `tmux kill-window` |
 | "添加项目 xxx" | `bash scripts/add-project.sh` |
 | "扫描项目" | `bash scripts/scan-projects.sh` |
+| "新建项目 xxx" / "建仓" | `bash scripts/new-project.sh`（/new-project skill） |
 | "打开浏览器看 xxx" | 启动浏览器双引擎 |
 | "项目列表" | `bash scripts/welcome.sh` |

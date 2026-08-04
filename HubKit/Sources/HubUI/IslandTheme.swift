@@ -74,6 +74,8 @@ public enum IslandTheme {
         case .nudge: (0.18, 0.10)
         // answer 要读一整句问题，按展开态那一档压。
         case .answer: (0.30, 0.22)
+        // prompt 上是问题选项或整段计划，密集程度不低于审批，同档压暗。
+        case .prompt: (0.34, 0.26)
         }
         return LinearGradient(
             colors: [.black.opacity(top), .black.opacity(bottom)],

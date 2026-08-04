@@ -71,17 +71,21 @@ public struct GitInfo: Hashable, Sendable {
     public let ahead: Int
     public let behind: Int
     public let hasUpstream: Bool
+    /// 最后一次提交的时间。项目列表按它排"最近在做的"。
+    public let lastCommitAt: Date?
 
     public var isClean: Bool { changeCount == 0 }
 
     public init(
-        branch: String?, changeCount: Int, ahead: Int, behind: Int, hasUpstream: Bool
+        branch: String?, changeCount: Int, ahead: Int, behind: Int, hasUpstream: Bool,
+        lastCommitAt: Date? = nil
     ) {
         self.branch = branch
         self.changeCount = changeCount
         self.ahead = ahead
         self.behind = behind
         self.hasUpstream = hasUpstream
+        self.lastCommitAt = lastCommitAt
     }
 }
 

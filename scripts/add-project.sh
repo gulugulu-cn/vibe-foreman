@@ -57,4 +57,12 @@ ${ALIAS_STR:+$ALIAS_STR
 EOF
 
 echo "已添加: $NAME → $PROJECT_PATH"
-[ ${#ALIASES[@]} -gt 0 ] && echo "  别名: ${ALIASES[*]}"
+if [ ${#ALIASES[@]} -gt 0 ]; then
+  echo "  别名: ${ALIASES[*]}"
+fi
+
+# 必须显式 exit 0。
+# 之前最后一行是 `[ ${#ALIASES[@]} -gt 0 ] && echo ...`：没有别名时这个测试为假，
+# 脚本退出码就成了 1 —— 明明写进去了，调用方（clone-project.sh / app）却报
+# "注册 projects.yaml 失败"。真踩过。
+exit 0
