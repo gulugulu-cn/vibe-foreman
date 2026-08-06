@@ -18,6 +18,7 @@ public final class IslandController {
     private let approvals: ApprovalCoordinator
     private let prompts: AgentPromptCoordinator
     private let projects: ProjectStore
+    private let placement: IslandPlacementStore
     private let model = IslandModel()
 
     private var panel: IslandPanel?
@@ -59,18 +60,39 @@ public final class IslandController {
         store: SessionStore,
         approvals: ApprovalCoordinator,
         prompts: AgentPromptCoordinator,
-        projects: ProjectStore
+        projects: ProjectStore,
+        placement: IslandPlacementStore
     ) {
         self.store = store
         self.approvals = approvals
         self.prompts = prompts
         self.projects = projects
+        self.placement = placement
+        placement.onChange = { [weak self] in self?.relocate() }
+    }
+
+    /// 换屏设置变了 —— 立刻挪过去。
+    ///
+    /// 不能复用 `realign()`：那里有 `guard geo != geometry else { return }`，
+    /// 用来挡住显示器参数变化的重复通知。但用户手动切设置时，如果两块屏的
+    /// 几何恰好相同（比如两台同型号外接屏），那个 guard 会让设置**看起来没生效**。
+    public func relocate() {
+        guard let panel, let screen = placement.screen() else { return }
+        let geo = NotchGeometry(screen: screen)
+        geometry = geo
+        position(panel, on: geo)
+        installRootView(geometry: geo)
+        updateHitPath()
+        HubLog.island.notice("""
+        按设置重新定位 —— 屏幕 \(screen.localizedName, privacy: .public)，\
+        跟随光标 \(self.placement.followsCursor, privacy: .public)
+        """)
     }
 
     // MARK: - 生命周期
 
     public func show() {
-        guard let screen = NotchGeometry.activeScreen() else {
+        guard let screen = placement.screen() else {
             HubLog.island.error("找不到可用屏幕，灵动岛未启动")
             return
         }
@@ -160,7 +182,7 @@ public final class IslandController {
     }
 
     private func realign() {
-        guard let panel, let screen = NotchGeometry.activeScreen() else { return }
+        guard let panel, let screen = placement.screen() else { return }
         let geo = NotchGeometry(screen: screen)
         guard geo != geometry else { return }
 

@@ -38,6 +38,7 @@ public struct MainWindowView: View {
     @Bindable var store: SessionStore
     @Bindable var projects: ProjectStore
     @Bindable var approvals: ApprovalCoordinator
+    @Bindable var placement: IslandPlacementStore
     let onJump: (String) -> Void
     let onLaunch: (Project, LaunchMode) -> Void
 
@@ -51,12 +52,14 @@ public struct MainWindowView: View {
         store: SessionStore,
         projects: ProjectStore,
         approvals: ApprovalCoordinator,
+        placement: IslandPlacementStore,
         onJump: @escaping (String) -> Void,
         onLaunch: @escaping (Project, LaunchMode) -> Void
     ) {
         self.store = store
         self.projects = projects
         self.approvals = approvals
+        self.placement = placement
         self.onJump = onJump
         self.onLaunch = onLaunch
     }
@@ -88,7 +91,7 @@ public struct MainWindowView: View {
         case .approvals:
             ApprovalLogPane(approvals: approvals)
         case .settings:
-            SettingsPane(approvals: approvals, projects: projects, git: git)
+            SettingsPane(approvals: approvals, projects: projects, git: git, placement: placement)
         }
     }
 }
@@ -662,6 +665,7 @@ struct SettingsPane: View {
     @Bindable var approvals: ApprovalCoordinator
     let projects: ProjectStore
     let git: GitAccountStore
+    @Bindable var placement: IslandPlacementStore
 
     @State private var hookStatus: String = "检查中…"
 
@@ -671,6 +675,24 @@ struct SettingsPane: View {
 
             ScrollView {
                 VStack(spacing: 12) {
+                    Card {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("灵动岛位置").font(.system(size: 14, weight: .semibold))
+                            Toggle("跟随光标去外接屏", isOn: $placement.followsCursor)
+                                .toggleStyle(.checkbox)
+
+                            Text("""
+                            默认固定在有刘海的那块屏。开了之后岛会跟着光标跑到外接屏 —— \
+                            但外接屏没有刘海，岛会变成悬浮在屏幕顶部的胶囊，正好压在\
+                            浏览器标签栏那一带，底下的东西会点不动。想在外接屏上也看到\
+                            状态再开。
+                            """)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+
                     Card {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("审批拦截").font(.system(size: 14, weight: .semibold))

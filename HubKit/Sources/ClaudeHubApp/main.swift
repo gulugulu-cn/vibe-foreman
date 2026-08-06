@@ -25,9 +25,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let approvals = ApprovalCoordinator()
     private let prompts = AgentPromptCoordinator()
     private let notifications = HubNotificationCenter()
+    private let placement = IslandPlacementStore()
 
     private lazy var island = IslandController(
-        store: store, approvals: approvals, prompts: prompts, projects: projects
+        store: store, approvals: approvals, prompts: prompts, projects: projects,
+        placement: placement
     )
     private lazy var hooks = HookCoordinator(
         store: store, approvals: approvals, prompts: prompts,
@@ -253,6 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             store: store,
             projects: projects,
             approvals: approvals,
+            placement: placement,
             onJump: { [weak self] sessionId in
                 self?.store.jump(to: sessionId)
             },
