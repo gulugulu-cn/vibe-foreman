@@ -24,7 +24,10 @@ struct AcceptancePane: View {
     let store: SessionStore
     let settings: VerifierSettings
     let verifier: AcceptanceVerifier
+    @Bindable var watchdog: SessionWatchdog
     @Binding var selection: String?
+
+    @State private var showProbes = false
 
     /// 正在跑验证的那一条。同时只允许跑一条 —— 并发跑 `swift build`
     /// 会互相抢构建目录锁，结果全是假失败。
@@ -98,6 +101,7 @@ struct AcceptancePane: View {
             )
 
             if !pickerPaths.isEmpty { controls }
+            watchdogBar
             sessionPromises
 
             if ledger?.items.isEmpty ?? true {
@@ -218,6 +222,69 @@ struct AcceptancePane: View {
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 10)
+    }
+
+    // MARK: - 盯梢
+
+    /// 会话观察者的开关和最近一次追问。
+    ///
+    /// 放在验收页而不是设置页：它和这一页是同一件事的两面 ——
+    /// 清单管「要做什么」，盯梢管「有没有一直做下去」。而且它天然按项目走，
+    /// 这一页本来就是项目作用域的。
+    ///
+    /// **最近一次追问必须显示出来。** 一个"在盯着"但从没说过话的盯梢，
+    /// 和没开是一样的，而用户没法从开关上区分这两种。
+    @ViewBuilder
+    private var watchdogBar: some View {
+        if let path = currentPath {
+            let on = watchdog.isWatching(path)
+            let recent = watchdog.history.first
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Toggle("盯梢：停了就追问", isOn: Binding(
+                        get: { on },
+                        set: { watchdog.setWatching($0, path) }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .font(.system(size: 12, weight: .medium))
+
+                    if on {
+                        Text("清单 \(watchdog.probeList(for: path).count) 条 · 轮着问")
+                            .font(.system(size: 11)).monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button(showProbes ? "收起清单" : "看/改清单") { showProbes.toggle() }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 11))
+                }
+
+                if on, let recent {
+                    Text("上次追问 \(recent.at, style: .relative)前 · \(recent.sessionName)：\(recent.probe)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+
+                if showProbes {
+                    TextEditor(text: Binding(
+                        get: { watchdog.probeList(for: path).joined(separator: "\n") },
+                        set: { watchdog.setProbes($0.components(separatedBy: "\n"), for: path) }
+                    ))
+                    .font(.system(size: 11))
+                    .frame(height: 140)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6).stroke(.quaternary)
+                    )
+                    Text("一行一条。它每次停下来就问下一条，问完从头再来。")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 8)
+        }
     }
 
     // MARK: - AI 答应的事做全了没

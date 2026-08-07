@@ -45,6 +45,7 @@ public struct MainWindowView: View {
     @Bindable var acceptance: AcceptanceStore
     @Bindable var verifierSettings: VerifierSettings
     let verifier: AcceptanceVerifier
+    @Bindable var watchdog: SessionWatchdog
     let channels: HookChannelMonitor
     let onJump: (String) -> Void
     let onLaunch: (Project, LaunchMode) -> Void
@@ -65,6 +66,7 @@ public struct MainWindowView: View {
         acceptance: AcceptanceStore,
         verifierSettings: VerifierSettings,
         verifier: AcceptanceVerifier,
+        watchdog: SessionWatchdog,
         channels: HookChannelMonitor,
         onJump: @escaping (String) -> Void,
         onLaunch: @escaping (Project, LaunchMode) -> Void
@@ -76,6 +78,7 @@ public struct MainWindowView: View {
         self.acceptance = acceptance
         self.verifierSettings = verifierSettings
         self.verifier = verifier
+        self.watchdog = watchdog
         self.channels = channels
         self.onJump = onJump
         self.onLaunch = onLaunch
@@ -112,7 +115,8 @@ public struct MainWindowView: View {
         case .acceptance:
             AcceptancePane(
                 acceptance: acceptance, projects: projects, store: store,
-                settings: verifierSettings, verifier: verifier, selection: $ledgerPath
+                settings: verifierSettings, verifier: verifier,
+                watchdog: watchdog, selection: $ledgerPath
             )
         case .projects:
             ProjectsPane(projects: projects, store: store, git: git, onLaunch: onLaunch)

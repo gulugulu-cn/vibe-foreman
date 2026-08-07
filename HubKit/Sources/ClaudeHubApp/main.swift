@@ -30,6 +30,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let verifierSettings = VerifierSettings()
     /// 唯一会执行命令的组件。默认关着，由 `verifierSettings` 驱动。
     private let verifier = AcceptanceVerifier()
+    /// 会话观察者：盯着开着的项目，会话停下来就按清单追问。
+    private lazy var watchdog = SessionWatchdog(store: store, projects: projects)
 
     private lazy var island = IslandController(
         store: store, approvals: approvals, prompts: prompts, projects: projects,
@@ -117,6 +119,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             && ProcessInfo.processInfo.environment["HUB_ISLAND_STATE"] != nil
         if !screenshotMode { stalls.start() }
 
+        // 盯梢本身没开销（没开着的项目直接跳过），但它会往终端注入文字 ——
+        // 截图模式下绝不能起，那会往演示会话里敲字。
+        if !screenshotMode { watchdog.start() }
+
         island.show()
         installStatusItem()
         observeApprovalQueue()
@@ -190,6 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         stalls.stop()
+        watchdog.stop()
         approvalObserver?.cancel()
         approvals.stopOrphanSweep()
         prompts.stopOrphanSweep()
@@ -273,6 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             acceptance: acceptance,
             verifierSettings: verifierSettings,
             verifier: verifier,
+            watchdog: watchdog,
             channels: hooks.channels,
             onJump: { [weak self] sessionId in
                 self?.store.jump(to: sessionId)
