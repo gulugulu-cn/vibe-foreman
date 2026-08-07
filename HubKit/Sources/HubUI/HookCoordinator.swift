@@ -24,6 +24,9 @@ public final class HookCoordinator {
 
     private let dedup = HookDedup()
     private let extractor = AcceptanceExtractor()
+    private let auditor = AcceptanceAuditor()
+    /// 正在复核中的项目。同一个项目不并发跑，理由同 `extracting`。
+    private var auditing: Set<String> = []
     /// 正在拆解中的项目。同一个项目的拆解不并发跑 —— 两次并发会拿到同一份
     /// 原话缓冲，把同一批要点拆两遍（去重能挡住重复入库，但白烧一次额度）。
     private var extracting: Set<String> = []
@@ -239,6 +242,83 @@ public final class HookCoordinator {
         else { return }
         acceptance.applyClaims(claims, in: projectPath)
         HubLog.app.notice("验收守望：收下 \(claims.count, privacy: .public) 条自查回答")
+        scheduleAudit(projectPath: projectPath, sessionId: event.sessionId)
+    }
+
+    /// 拿真实 git diff 复核所有「待复核」项。
+    ///
+    /// 自查治的是「忘」（把用户的原始要求重新摆到它眼前），但自查仍然是它在说
+    /// 自己，治不了「骗」，也治不了「它真心以为自己做了」。这一步读代码里到底
+    /// 有没有对应改动，治的是后者。
+    @MainActor
+    private func scheduleAudit(projectPath: String, sessionId: String) {
+        guard !auditing.contains(projectPath) else { return }
+
+        let items = acceptance.ledger(for: projectPath).items
+            .filter { $0.status == .claimed && !$0.isSettledByUser }
+        guard !items.isEmpty else { return }
+
+        let subjects = items.map {
+            AuditSubject(
+                id: $0.id, text: $0.text, acceptance: $0.acceptance,
+                claimed: $0.latestClaim ?? "（没说）"
+            )
+        }
+        // 取最早的基线：要点是陆续入库的，用最晚那个会把先入库要点对应的改动
+        // 全部排除在 diff 之外，于是它们必然被判成「代码里找不到」。
+        let since = items.compactMap(\.baselineCommit).min()
+        // Hub 自己通过 PostToolUse 看到的被改文件 —— 第一手，不经 Claude 转述。
+        let touched = acceptance.touchedFiles(sessionId: sessionId)
+
+        auditing.insert(projectPath)
+        let auditor = self.auditor
+
+        Task.detached(priority: .utility) {
+            let results = await auditor.audit(
+                subjects: subjects, cwd: projectPath, since: since, touchedFiles: touched
+            )
+
+            await MainActor.run {
+                self.auditing.remove(projectPath)
+                // nil = 这次没跑成。**什么都别改** —— 把"复核失败"当成"存疑"
+                // 会让模型每抽风一次就诬告一批要点。
+                guard let results, !results.isEmpty else { return }
+
+                self.acceptance.applyAudit(
+                    results.map { result in
+                        AcceptanceVerdict(
+                            id: result.id,
+                            confirmed: result.confirmed,
+                            note: result.note,
+                            evidence: Self.evidence(for: result, cwd: projectPath, since: since)
+                        )
+                    },
+                    in: projectPath
+                )
+                let disputed = results.filter { !$0.confirmed }.count
+                HubLog.app.notice("""
+                验收复核：\(results.count, privacy: .public) 条，\
+                存疑 \(disputed, privacy: .public) 条
+                """)
+            }
+        }
+    }
+
+    /// 把复核认定的文件换算成带行数的证据。
+    ///
+    /// 行数取自 `git diff --numstat`，**不是模型报的** —— 模型只负责说
+    /// "这条要点对应哪几个文件"，具体改了多少行由 git 自己回答。
+    /// 让模型报数字等于又给了一次编造的机会。
+    private nonisolated static func evidence(
+        for result: AuditResult, cwd: String, since: String?
+    ) -> [Evidence] {
+        guard !result.files.isEmpty else { return [] }
+        let changes = GitDiff.numstat(cwd, since: since)
+        return result.files.compactMap { path in
+            guard let change = changes.first(where: { $0.path.hasSuffix(path) || path.hasSuffix($0.path) })
+            else { return nil }
+            return .diff(path: change.path, added: change.added, removed: change.removed)
+        }
     }
 
     /// 从 Claude 的回复里挖出自查 JSON。
@@ -337,6 +417,9 @@ public final class HookCoordinator {
         let extractor = self.extractor
 
         Task.detached(priority: .utility) {
+            // 在后台线程读 HEAD：它要 fork 一个 git 进程，别占着 MainActor。
+            let baseline = GitDiff.head(projectPath)
+
             let points: [ExtractedPoint]?
             if await extractor.shouldExtract(prompts: prompts, plan: plan) {
                 points = await extractor.extract(
@@ -361,7 +444,10 @@ public final class HookCoordinator {
                             text: $0.text,
                             acceptance: $0.acceptance,
                             origin: $0.inferred ? .inferred : (plan != nil ? .plan : .userPrompt),
-                            baselineCommit: nil
+                            // 入库这一刻的 HEAD 就是这条要点的 diff 起点。
+                            // 少了它，复核时无从回答"这条要点之后代码变了什么"，
+                            // 只能拿整个仓库历史去比，噪音大到没法用。
+                            baselineCommit: baseline
                         )
                     },
                     into: projectPath

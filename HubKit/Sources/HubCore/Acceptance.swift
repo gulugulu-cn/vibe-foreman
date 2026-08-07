@@ -149,6 +149,13 @@ public struct AcceptanceItem: Codable, Sendable, Identifiable, Equatable {
 
     /// 还没有定论、需要用户关注的。
     public var needsAttention: Bool { status == .open || status == .disputed }
+
+    /// Claude 最近一次的自报说辞。复核时拿它去定位该看哪几个文件 ——
+    /// **只是线索，不是证据**，所以取的是 `.claimed` 那一档。
+    public var latestClaim: String? {
+        for case .claimed(let text) in evidence.reversed() { return text }
+        return nil
+    }
 }
 
 /// 用户说过的一句原话。

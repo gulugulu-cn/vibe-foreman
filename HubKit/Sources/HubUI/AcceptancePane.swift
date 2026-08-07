@@ -1,5 +1,6 @@
 import AppKit
 import HubCore
+import HubProbe
 import HubProjects
 import SwiftUI
 
@@ -28,6 +29,15 @@ struct AcceptancePane: View {
     @State private var pickerOpen = false
     @State private var query = ""
     @State private var lane: AcceptanceLedger.Lane = .pending
+    @State private var diff: DiffRequest?
+
+    /// 「看改动」弹的那张 sheet 的内容。
+    struct DiffRequest: Identifiable {
+        let id = UUID()
+        let path: String
+        let itemText: String
+        var patch: String?   // nil = 还在读
+    }
     @FocusState private var searchFocused: Bool
 
     /// 选择器里要列的项目：**所有已登记项目**，有清单的排前面。
@@ -91,6 +101,67 @@ struct AcceptancePane: View {
             }
 
             composer
+        }
+        .sheet(item: $diff) { request in
+            diffSheet(request)
+        }
+    }
+
+    // MARK: - 点击回溯
+
+    @ViewBuilder
+    private func diffSheet(_ request: DiffRequest) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(request.path)
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .lineLimit(1).truncationMode(.head)
+                Text(request.itemText)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(14)
+
+            Divider()
+
+            if let patch = request.patch {
+                ScrollView([.vertical, .horizontal]) {
+                    Text(patch.isEmpty ? "这个文件从基线到现在没有改动。" : patch)
+                        .font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                }
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            Divider()
+            HStack {
+                Spacer()
+                Button("关闭") { diff = nil }.keyboardShortcut(.defaultAction)
+            }
+            .padding(10)
+        }
+        .frame(width: 760, height: 520)
+    }
+
+    /// 读某个文件从基线到现在的 diff。
+    ///
+    /// 在后台读：`git diff` 要 fork 一个进程，大仓库上能到几百毫秒，
+    /// 放在主线程会让整个窗口卡一下。
+    private func openDiff(path: String, item: AcceptanceItem) {
+        guard let cwd = currentPath else { return }
+        diff = DiffRequest(path: path, itemText: item.text, patch: nil)
+        let since = item.baselineCommit
+        Task.detached(priority: .userInitiated) {
+            let patch = GitDiff.patch(cwd, since: since, paths: [path], limit: 200_000)
+            await MainActor.run {
+                // 用户可能已经关掉或点了别的文件 —— 只更新还在等的那一个。
+                guard diff?.path == path else { return }
+                diff?.patch = patch
+            }
         }
     }
 
@@ -363,6 +434,13 @@ struct AcceptancePane: View {
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                    // 点文件看真实 diff —— 「点击回溯看看实际更新的」。
+                    // 只有 .diff 有得看：自述里没有文件，跑命令的输出在报告里。
+                    if case .diff(let path, _, _) = evidence {
+                        Button("看改动") { openDiff(path: path, item: item) }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 10, weight: .medium))
+                    }
                 }
             }
 
