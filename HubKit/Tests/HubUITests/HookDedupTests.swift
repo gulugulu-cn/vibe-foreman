@@ -62,8 +62,8 @@ final class HookDedupTests: XCTestCase {
 
     func testDifferentSessionsAreNotDuplicates() throws {
         let dedup = HookDedup()
-        let a = try XCTUnwrap(HookDedup.key(for: event(.stop, session: "a", lastMessage: "好了")))
-        let b = try XCTUnwrap(HookDedup.key(for: event(.stop, session: "b", lastMessage: "好了")))
+        let a = try XCTUnwrap(HookDedup.key(for: event(.sessionEnd, session: "a")))
+        let b = try XCTUnwrap(HookDedup.key(for: event(.sessionEnd, session: "b")))
 
         XCTAssertNotEqual(a, b)
         guard case .first = dedup.begin(a, waitForDecision: false) else {
@@ -72,6 +72,23 @@ final class HookDedupTests: XCTestCase {
         guard case .first = dedup.begin(b, waitForDecision: false) else {
             return XCTFail("另一个会话不该被当成重复")
         }
+    }
+
+    /// **收工事件刻意不去重。**
+    ///
+    /// 缓存决策只有在决策是事件的**纯函数**时才成立。preToolUse 满足
+    /// （同一次工具调用永远同一个结论）；stop 不满足 —— 它取决于会变的上膛状态。
+    ///
+    /// 这条来自一次真实的端到端失败：先发一条未上膛的 stop（不拦），
+    /// 再上膛、再发一条内容一模一样的 stop —— 第二条被当成副本，
+    /// 复用了"不拦"的结论，**拦截静默失效**。
+    ///
+    /// 把 discriminator 改回 `lastAssistantMessage`，这条必须变红。
+    func testStopIsDeliberatelyNotDeduplicated() {
+        XCTAssertNil(
+            HookDedup.key(for: event(.stop, lastMessage: "做完了")),
+            "stop 的结论依赖上膛状态，不是事件的纯函数，不能缓存"
+        )
     }
 
     /// 时间窗外的同样内容不算重复。
@@ -165,8 +182,8 @@ final class HookDedupTests: XCTestCase {
     /// 算不出来（返回 nil）意味着那一类完全不去重 —— 加新 kind 时最容易漏的
     /// 就是这里，而漏了不会报错，只会在某天变成"通知弹两遍"。
     func testEveryNonToolKindProducesAKey() {
-        let toolKinds: Set<HookEvent.Kind> = [.preToolUse, .postToolUse]
-        for kind in HookChannelMonitor.expected where !toolKinds.contains(kind) {
+        let exempt: Set<HookEvent.Kind> = [.preToolUse, .postToolUse, .stop]
+        for kind in HookChannelMonitor.expected where !exempt.contains(kind) {
             XCTAssertNotNil(
                 HookDedup.key(for: event(kind)),
                 "\(kind.rawValue) 算不出去重 key —— 加新 kind 时漏了 HookDedup.key"

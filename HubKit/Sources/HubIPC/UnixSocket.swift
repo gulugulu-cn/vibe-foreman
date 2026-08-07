@@ -88,6 +88,9 @@ enum UnixSocket {
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw SocketError.createFailed(errno) }
+        // 服务端也可能先关（Hub 正在退出）。同样不能让写失败变成杀掉 hubctl ——
+        // 被信号杀掉的 hook 等同于没有输出，而那正是 fail-open 的反面。
+        suppressSIGPIPE(fd: fd)
 
         let connected = withAddress(&addr) { Darwin.connect(fd, $0, $1) }
         guard connected == 0 else {
@@ -131,6 +134,40 @@ enum UnixSocket {
 
     /// 写一行。
     @discardableResult
+    /// 关掉这个 fd 的 SIGPIPE。
+    ///
+    /// **不加这一句，往一个对端已关闭的 socket 写数据会直接杀掉整个进程。**
+    /// 默认行为是发 SIGPIPE，而 SIGPIPE 的默认处置是终止 —— 不是返回错误码，
+    /// 是进程没了。
+    ///
+    /// 这不是理论风险，是实测撞到的：Stop 改成需要应答之后，服务端会给 stop
+    /// 回写决策；而不等应答的客户端（旧版 hubctl、被 Ctrl-C 掉的 hook）
+    /// 早就把连接关了。于是每一次这样的收工都会**杀掉 Claude Hub**。
+    /// 测试套件是直接崩在 signal 13 上才暴露的。
+    ///
+    /// 用 per-socket 的 `SO_NOSIGPIPE` 而不是全局 `signal(SIGPIPE, SIG_IGN)`：
+    /// 全局改会影响进程里所有别的代码（包括 Swift 运行时和第三方库），
+    /// 而这里只需要让这几个 socket 上的写失败退化成返回 -1 + EPIPE。
+    static func suppressSIGPIPE(fd: Int32) {
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+    }
+
+    /// 进程级忽略 SIGPIPE。**必须调，per-socket 的那个不够。**
+    ///
+    /// 一开始只加了 `SO_NOSIGPIPE`（per-socket，影响面更小，看起来更讲究），
+    /// 结果测试照样崩在 signal 13 上 —— 那个 setsockopt 的返回值没人检查，
+    /// 而它显然没起作用。这是"选了看起来更干净的方案，却没验证它真的有效"
+    /// 的典型：更讲究的写法如果不生效，就只是更讲究的 bug。
+    ///
+    /// 忽略之后写失败退化成返回 -1 + EPIPE，由 `writeLine` 正常返回 false。
+    /// 对网络服务来说这是标准做法，不是权宜之计。
+    ///
+    /// 幂等，多次调用无害。
+    static func ignoreSIGPIPEProcessWide() {
+        signal(SIGPIPE, SIG_IGN)
+    }
+
     static func writeLine(fd: Int32, _ line: String) -> Bool {
         var data = Array((line + "\n").utf8)
         var offset = 0

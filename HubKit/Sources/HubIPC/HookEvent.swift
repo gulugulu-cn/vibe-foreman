@@ -42,6 +42,24 @@ public struct HookEvent: Codable, Sendable {
         /// 压缩正是"遗忘"最集中发生的时刻 —— Claude 记不住的东西，
         /// Hub 的清单记得住。
         case preCompact
+
+        /// 这类事件的发起方在等一个决策，服务端必须回写。
+        ///
+        /// **hubctl 和 HubSocketServer 必须都用这一个属性判断，别各写各的 `if`。**
+        ///
+        /// 这条来自一次真实事故：把 Stop 改成阻塞式时只动了 hubctl（让它等应答），
+        /// 服务端那边的 `guard kind == .preToolUse` 原封不动 —— 于是 hubctl 等到的
+        /// 永远是连接关闭，拦截**一次都没生效过**，而且不报错、不超时、
+        /// 表现得和"清单里没有待办"一模一样。查了三轮才找到。
+        ///
+        /// 两边共用一个判断之后，这种分歧在结构上就不成立了。
+        public var expectsDecision: Bool {
+            switch self {
+            case .preToolUse, .stop: return true
+            case .notification, .sessionEnd, .userPromptSubmit,
+                 .sessionStart, .postToolUse, .subagentStop, .preCompact: return false
+            }
+        }
     }
 
     public let kind: Kind
@@ -186,6 +204,24 @@ public struct HookDecision: Codable, Sendable {
             ],
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: output) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// Stop hook 应答的 stdout 内容。
+    ///
+    /// `{"decision":"block","reason":...}` 会让 Claude **不停下来**，
+    /// 并把 reason 当成新的输入继续跑一轮 —— 验收清单就是靠这个塞回去的。
+    ///
+    /// nil = 什么都不输出 = 正常收工。**这是绝大多数情况**，也是所有异常
+    /// 情况的落点：Hub 没运行、桥接超时、清单为空、没上膛，全都走这里。
+    ///
+    /// 注意和 `hookOutputJSON()` 的格式**完全不同**（那个是
+    /// hookSpecificOutput + permissionDecision），别想着合并成一个。
+    public func stopOutputJSON() -> String? {
+        guard verdict == .deny, let reason, !reason.isEmpty else { return nil }
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: ["decision": "block", "reason": reason]
+        ) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 }

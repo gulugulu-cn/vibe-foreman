@@ -58,7 +58,20 @@ final class HookDedup: @unchecked Sendable {
             // 空输入退化成空串是安全的：5 秒内两条空输入吞掉一条没有任何损失。
             discriminator = event.promptText ?? ""
         case .stop:
-            discriminator = event.lastAssistantMessage ?? event.stopReason ?? ""
+            // **刻意不去重。**
+            //
+            // 缓存决策只有在决策是事件的**纯函数**时才成立。preToolUse 满足
+            // （同一次工具调用永远同一个结论），stop 不满足 —— 它取决于会变的
+            // 上膛状态：同样内容的两条 stop，一条在用户说话前、一条在之后，
+            // 结论截然相反。
+            //
+            // 实测踩到过：先发一条未上膛的 stop（不拦），再上膛、再发一条内容
+            // 一模一样的 stop —— 第二条被当成副本，复用了"不拦"，拦截静默失效。
+            //
+            // 不去重的代价只是重复 stop 会多发一条通知，而重复 stop 本来就
+            // 几乎不会发生（相同命令 Claude Code 自己会去重）。上膛机制自身
+            // 也是安全的：第一条消费掉膛，第二条自然看到未上膛。
+            discriminator = nil
         case .notification:
             discriminator = event.message ?? event.notificationType ?? ""
         case .sessionStart, .sessionEnd, .subagentStop, .preCompact:

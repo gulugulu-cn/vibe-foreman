@@ -82,30 +82,34 @@ if settings.get("autoMemoryDirectory") != "./.claude/memory":
     changed.append("补上 autoMemoryDirectory")
 
 # ── hook ──────────────────────────────────────────────────────
+# (事件, hubctl 子命令, 阻塞时的 timeout；None = 非阻塞)
+#
+# Stop 的 10 秒和 PreToolUse 的 90 秒必须和 HubIPC/Timeouts.swift 里的阶梯一致。
+# Stop 挡在每一次收工前面，用 90 秒会让 Hub 一卡住用户就干等。
 HOOKS = [
-    ("SessionStart", "sessionstart", False),
-    ("UserPromptSubmit", "userprompt", False),
-    ("PreToolUse", "pretool", True),
-    ("PostToolUse", "posttool", False),
-    ("Notification", "notification", False),
-    ("Stop", "stop", False),
-    ("SubagentStop", "subagentstop", False),
-    ("PreCompact", "precompact", False),
-    ("SessionEnd", "sessionend", False),
+    ("SessionStart", "sessionstart", None),
+    ("UserPromptSubmit", "userprompt", None),
+    ("PreToolUse", "pretool", 90),
+    ("PostToolUse", "posttool", None),
+    ("Notification", "notification", None),
+    ("Stop", "stop", 10),
+    ("SubagentStop", "subagentstop", None),
+    ("PreCompact", "precompact", None),
+    ("SessionEnd", "sessionend", None),
 ]
 
 if with_hooks:
     hooks = settings.setdefault("hooks", {})
     fixed = 0
-    for event, argument, blocking in HOOKS:
+    for event, argument, timeout in HOOKS:
         command = f"{hubctl} hook {argument}"
         entries = [
             entry for entry in (hooks.get(event) or [])
             if not any("hubctl hook" in h.get("command", "") for h in entry.get("hooks", []))
         ]
         hook = {"type": "command", "command": command}
-        if blocking:
-            hook["timeout"] = 90
+        if timeout is not None:
+            hook["timeout"] = timeout
         else:
             hook["async"] = True
         entries.append({"hooks": [hook]})

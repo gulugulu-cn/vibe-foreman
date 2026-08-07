@@ -30,6 +30,11 @@ public final class HubSocketServer: @unchecked Sendable {
     }
 
     public func start() throws {
+        // 客户端可能在我们回写决策之前就关掉连接（不等应答的 hook、
+        // 被 Ctrl-C 掉的 hubctl、旧版二进制）。不忽略 SIGPIPE 的话，
+        // 那一次 write 会**直接杀掉 Claude Hub** —— 不是报错，是进程没了。
+        UnixSocket.ignoreSIGPIPEProcessWide()
+
         let fd = try UnixSocket.listen(at: path)
         listenFd = fd
 
@@ -50,6 +55,9 @@ public final class HubSocketServer: @unchecked Sendable {
     private func acceptOne() {
         let clientFd = accept(listenFd, nil, nil)
         guard clientFd >= 0 else { return }
+        // 客户端可能在我们回写之前就关掉连接（不等应答的 hook、被 Ctrl-C 掉的
+        // hubctl）。不关掉 SIGPIPE 的话那一次 write 会**直接杀掉 Claude Hub**。
+        UnixSocket.suppressSIGPIPE(fd: clientFd)
 
         workQueue.async { [handler] in
             defer { close(clientFd) }
@@ -63,7 +71,8 @@ public final class HubSocketServer: @unchecked Sendable {
 
             let decision = handler(event)
 
-            guard event.kind == .preToolUse else { return }
+            // 用 Kind.expectsDecision，别在这里写死类型 —— 见那个属性上的事故说明。
+            guard event.kind.expectsDecision else { return }
             let payload = decision ?? .allow
             if let encoded = try? JSONEncoder().encode(payload),
                let text = String(data: encoded, encoding: .utf8) {
@@ -102,6 +111,10 @@ public enum HubSocketClient {
         waitForDecision: Bool,
         timeout: TimeInterval
     ) -> HookSendResult {
+        // Hub 可能正在退出，服务端先关了。被 SIGPIPE 杀掉的 hook 等同于
+        // 没有输出 —— 对审批链路来说那就是放行，正是 fail-open 的反面。
+        UnixSocket.ignoreSIGPIPEProcessWide()
+
         guard let data = try? JSONEncoder().encode(event),
               let line = String(data: data, encoding: .utf8)
         else { return .unreachable }

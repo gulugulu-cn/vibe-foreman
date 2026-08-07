@@ -80,6 +80,14 @@ final class SocketRoundTripTests: XCTestCase {
         }
     }
 
+    /// 顺带也是 **SIGPIPE 的回归护栏**，别删。
+    ///
+    /// 它模拟的是"客户端不等应答就关连接"——旧版 hubctl、被 Ctrl-C 掉的 hook
+    /// 都是这个形态。Stop 改成需要应答之后，服务端会往这个已关闭的连接写决策，
+    /// 而没有忽略 SIGPIPE 的话那一次 write 会**直接杀掉整个进程**。
+    ///
+    /// 当时的表现就是这条测试崩在 signal 13 上（不是断言失败，是进程没了）。
+    /// 生产环境里对应的是"新 Hub + 旧 hubctl → 每次收工 Claude Hub 都被杀掉"。
     func testFireAndForgetEventReachesServer() throws {
         let received = XCTestExpectation(description: "服务端收到事件")
         nonisolated(unsafe) var seen: HookEvent?

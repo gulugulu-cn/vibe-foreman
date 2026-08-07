@@ -79,7 +79,7 @@ def strip_legacy(entries):
         kept.append(entry)
     return kept
 
-def install(event, argument, *, blocking):
+def install(event, argument, *, blocking, timeout=90):
     entries = strip_legacy(hooks.get(event))
     hook = {"type": "command", "command": f"{hubctl} hook {argument}"}
     if blocking:
@@ -88,7 +88,7 @@ def install(event, argument, *, blocking):
         # 90 秒是超时阶梯（HookTimeouts）的最外层，必须大于 hubctl 的 75 秒读超时：
         # 如果 Claude 在 hubctl 输出拒绝之前就把它杀掉，那等同于没有输出，
         # 也就是**放行** —— 正好是安全默认值的反面。
-        hook["timeout"] = 90
+        hook["timeout"] = timeout
     else:
         # async: true 很关键 —— 旧配置是 false 且 hook 里同步 afplay，
         # 导致每轮回复结束都被阻塞。
@@ -110,7 +110,12 @@ install("UserPromptSubmit", "userprompt", blocking=False)
 install("PreToolUse", "pretool", blocking=True)
 install("PostToolUse", "posttool", blocking=False)
 install("Notification", "notification", blocking=False)
-install("Stop", "stop", blocking=False)
+# Stop 是阻塞的：Hub 要在这里判断该不该把验收清单塞回去。
+#
+# 10 秒而不是 90 —— 它挡在**每一次收工**前面，Hub 一卡住用户就干等。
+# 判断本身是查内存，毫秒级；这 10 秒纯粹是异常时的上界。
+# 超时被杀掉等同于没有输出，也就是正常收工，方向是安全的。
+install("Stop", "stop", blocking=True, timeout=10)
 install("SubagentStop", "subagentstop", blocking=False)
 install("PreCompact", "precompact", blocking=False)
 install("SessionEnd", "sessionend", blocking=False)

@@ -108,8 +108,7 @@ public final class HookCoordinator {
     private nonisolated func dispatch(_ event: HookEvent) -> HookDecision {
         switch event.kind {
         case .stop:
-            Task { @MainActor in self.handleStop(event) }
-            return .allow
+            return handleStopSynchronously(event)
 
         case .notification:
             Task { @MainActor in self.handleNotification(event) }
@@ -142,9 +141,46 @@ public final class HookCoordinator {
         }
     }
 
+    /// 收工。**阻塞式** —— hubctl 在等"要不要把验收清单塞回去"。
+    ///
+    /// ## 兜底方向和审批链路相反，这是本方法最要紧的一条
+    ///
+    /// `handlePreToolUseSynchronously` 超时兜底是 **deny**（安全刹车）。
+    /// 这里超时兜底必须是 **allow = 不拦**。写反的话 Hub 一出问题，
+    /// 所有会话就再也收不了工 —— 比"少提醒一次验收"严重得多。
+    ///
+    /// 3 秒足够：该不该拦是查内存里的清单，毫秒级就有答案，
+    /// 这 3 秒纯粹是给 MainActor 排队留的余量。
+    private nonisolated func handleStopSynchronously(_ event: HookEvent) -> HookDecision {
+        let semaphore = DispatchSemaphore(value: 0)
+        // 同 handlePreToolUseSynchronously：只有下面的 Task 写、wait 之后才读。
+        nonisolated(unsafe) var result = HookDecision.allow
+
+        Task { @MainActor in
+            result = self.handleStop(event)
+            semaphore.signal()
+        }
+
+        if semaphore.wait(timeout: .now() + HookTimeouts.stopBridge) == .timedOut {
+            HubLog.ipc.error("收工桥接超时 —— 放行（绝不能因为 Hub 慢就让会话停不下来）")
+            return .allow
+        }
+        return result
+    }
+
     @MainActor
-    private func handleStop(_ event: HookEvent) {
+    private func handleStop(_ event: HookEvent) -> HookDecision {
         store.refresh()
+
+        let path = AcceptanceStore.projectPath(forCWD: event.cwd, projects: projects)
+
+        // 先收自查回答，再决定拦不拦。
+        //
+        // 顺序不能反：上一轮拦下来之后 Claude 的回答就在这条事件的
+        // lastAssistantMessage 里，先收下来，这一轮的清单才是最新的。
+        collectClaims(from: event, projectPath: path)
+
+        let decision = interceptDecision(for: event, projectPath: path)
 
         let project = projects.projectName(forPath: event.cwd) ?? event.fallbackProjectName
         let session = store.sessions.first { $0.sessionId == event.sessionId }
@@ -153,6 +189,13 @@ public final class HookCoordinator {
         // 正文用 Claude 自己的最终回复，替掉旧实现那 5 条随机中文文案
         // （"搞定了，来看看" 之类，信息量为零，用户还得切过去才知道干了什么）。
         let body = Self.summarize(event.lastAssistantMessage) ?? "完成了一轮回复"
+
+        // 被拦下来的这一轮不是"收工"，别发完成通知 —— Claude 马上还要再跑一轮，
+        // 现在弹「✅ 完成了」是在骗用户。
+        guard decision.verdict != .deny else {
+            HubLog.app.notice("验收守望：拦下 \(title, privacy: .public) 的收工，要求逐条核对")
+            return decision
+        }
 
         notifications.post(title: "✅ \(title)", body: body, sessionId: event.sessionId)
 
@@ -164,6 +207,74 @@ public final class HookCoordinator {
                 )
             )
         }
+        return decision
+    }
+
+    /// 该不该拦这一次收工。
+    @MainActor
+    private func interceptDecision(for event: HookEvent, projectPath: String) -> HookDecision {
+        // Claude 已经因为 Stop hook 在续跑了 —— 绝不能再拦。
+        //
+        // 这是**第二道**。真正的保证是下面 disarmAndShouldIntercept 里的上膛机制，
+        // 因为这个字段在本机没验证过，不同 CLI 版本给不给都不确定。
+        guard event.stopHookActive != true else { return .allow }
+
+        guard acceptance.disarmAndShouldIntercept(
+            sessionId: event.sessionId, projectPath: projectPath
+        ) else { return .allow }
+
+        guard let text = acceptance.injectionText(for: projectPath) else { return .allow }
+
+        return HookDecision(verdict: .deny, reason: text)
+    }
+
+    /// 收下 Claude 上一轮的逐条自查回答。
+    ///
+    /// 解析不出来就什么都不做 —— 它很可能是直接去补做遗漏项了（那其实是好事），
+    /// 或者干脆没按格式答。这两种情况都退回旁路复核，不该报错也不该清状态。
+    @MainActor
+    private func collectClaims(from event: HookEvent, projectPath: String) {
+        guard let message = event.lastAssistantMessage,
+              let claims = Self.parseClaims(message), !claims.isEmpty
+        else { return }
+        acceptance.applyClaims(claims, in: projectPath)
+        HubLog.app.notice("验收守望：收下 \(claims.count, privacy: .public) 条自查回答")
+    }
+
+    /// 从 Claude 的回复里挖出自查 JSON。
+    ///
+    /// 走 `ModelOutput.extractJSONObject` 而不是直接解析：模型在 JSON 前后
+    /// 各写一段话是常态（"我核对了一遍：{…} 需要我继续吗？"），
+    /// 而这里它是在一段长对话的末尾被要求输出 JSON 的，更容易加客套话。
+    nonisolated static func parseClaims(_ message: String) -> [AcceptanceClaim]? {
+        guard let object = ModelOutput.extractJSONObject(message),
+              let raw = object["items"] as? [[String: Any]]
+        else { return nil }
+
+        return raw.compactMap { item in
+            guard let id = item["id"] as? String, !id.isEmpty else { return nil }
+            return AcceptanceClaim(
+                id: id,
+                // done 缺失或不是**真正的布尔**时按没做算。方向是刻意的：
+                // 把含糊不清当成"做完了"，等于给虚报开了个免检通道。
+                done: Self.strictlyTrue(item["done"]),
+                evidence: (item["evidence"] as? String) ?? ""
+            )
+        }
+    }
+
+    /// 只有 JSON 里字面写的 `true` 才算数。
+    ///
+    /// **不能用 `as? Bool`。** JSONSerialization 把 `true` 和 `1` 都解成 NSNumber，
+    /// 而 NSNumber 到 Bool 的桥接对 `1` 是成立的 —— 于是 `{"done":1}` 会被判成
+    /// 做完了。测试抓到过：模型只要把 done 写成数字就能绕过"含糊按没做算"。
+    ///
+    /// CFBoolean 和 CFNumber 是不同的 CF 类型，按类型 ID 判才分得开。
+    nonisolated static func strictlyTrue(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) == CFBooleanGetTypeID()
+        else { return false }
+        return number.boolValue
     }
 
     /// 用户提交了一句话。

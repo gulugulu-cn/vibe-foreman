@@ -146,9 +146,24 @@ private func runHook(_ name: String) -> Int32 {
 
     let result = HubSocketClient.send(
         event,
-        waitForDecision: kind == .preToolUse,
-        timeout: approvalTimeout
+        // 和服务端共用同一个判断，见 Kind.expectsDecision 上的事故说明。
+        waitForDecision: kind.expectsDecision,
+        // Stop 走独立的短阶梯：它挡在**每一次收工**前面，
+        // 用 75 秒会让 Hub 一卡住用户就永远收不了工。
+        timeout: kind == .stop ? HookTimeouts.stopRead : approvalTimeout
     )
+
+    // Stop 的应答和 PreToolUse **方向相反**，单独处理。
+    //
+    // PreToolUse 的 .noResponse 要保守拒绝（服务端认为该拦，只是没答上来）；
+    // Stop 的一切异常都必须什么都不输出 = 正常收工。写反的话 Hub 一出问题
+    // 所有会话都再也停不下来 —— 比"少提醒一次验收"严重得多。
+    if kind == .stop {
+        if case .decided(let decision) = result, let text = decision.stopOutputJSON() {
+            print(text)
+        }
+        return 0
+    }
 
     guard kind == .preToolUse else { return 0 }
 
