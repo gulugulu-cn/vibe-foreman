@@ -7,6 +7,7 @@ import SwiftUI
 /// 主窗口的分区。
 public enum DashboardSection: String, CaseIterable, Identifiable, Sendable {
     case sessions = "会话"
+    case acceptance = "验收"
     case projects = "项目"
     case usage = "用量"
     case approvals = "审批日志"
@@ -17,6 +18,7 @@ public enum DashboardSection: String, CaseIterable, Identifiable, Sendable {
     var symbol: String {
         switch self {
         case .sessions: return "bolt.horizontal.circle"
+        case .acceptance: return "checklist"
         case .projects: return "folder"
         case .usage: return "chart.bar"
         case .approvals: return "checkmark.shield"
@@ -39,11 +41,15 @@ public struct MainWindowView: View {
     @Bindable var projects: ProjectStore
     @Bindable var approvals: ApprovalCoordinator
     @Bindable var placement: IslandPlacementStore
+    @Bindable var acceptance: AcceptanceStore
+    let channels: HookChannelMonitor
     let onJump: (String) -> Void
     let onLaunch: (Project, LaunchMode) -> Void
 
     @State private var section: DashboardSection = .sessions
     @State private var search = ""
+    /// 当前在「验收」页看的是哪个项目。会话行的「清单」按钮会写它。
+    @State private var ledgerPath: String?
     /// Git 账号/仓库列表。挂在窗口这一层：克隆表单每次打开复用同一份数据
     /// （带磁盘缓存），只做后台静默刷新，不再让用户每次干等加载。
     @State private var git = GitAccountStore()
@@ -53,6 +59,8 @@ public struct MainWindowView: View {
         projects: ProjectStore,
         approvals: ApprovalCoordinator,
         placement: IslandPlacementStore,
+        acceptance: AcceptanceStore,
+        channels: HookChannelMonitor,
         onJump: @escaping (String) -> Void,
         onLaunch: @escaping (Project, LaunchMode) -> Void
     ) {
@@ -60,6 +68,8 @@ public struct MainWindowView: View {
         self.projects = projects
         self.approvals = approvals
         self.placement = placement
+        self.acceptance = acceptance
+        self.channels = channels
         self.onJump = onJump
         self.onLaunch = onLaunch
     }
@@ -83,7 +93,19 @@ public struct MainWindowView: View {
     private var detail: some View {
         switch section {
         case .sessions:
-            SessionsPane(store: store, projects: projects, onJump: onJump)
+            SessionsPane(
+                store: store, projects: projects, onJump: onJump,
+                onOpenLedger: { session in
+                    ledgerPath = AcceptanceStore.projectPath(
+                        forCWD: session.cwd, projects: projects
+                    )
+                    section = .acceptance
+                }
+            )
+        case .acceptance:
+            AcceptancePane(
+                acceptance: acceptance, projects: projects, store: store, selection: $ledgerPath
+            )
         case .projects:
             ProjectsPane(projects: projects, store: store, git: git, onLaunch: onLaunch)
         case .usage:
@@ -91,7 +113,10 @@ public struct MainWindowView: View {
         case .approvals:
             ApprovalLogPane(approvals: approvals)
         case .settings:
-            SettingsPane(approvals: approvals, projects: projects, git: git, placement: placement)
+            SettingsPane(
+                approvals: approvals, projects: projects, git: git,
+                placement: placement, channels: channels
+            )
         }
     }
 }
@@ -182,6 +207,7 @@ struct SessionsPane: View {
     let store: SessionStore
     let projects: ProjectStore
     let onJump: (String) -> Void
+    let onOpenLedger: (AgentSession) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -228,6 +254,10 @@ struct SessionsPane: View {
                                 Spacer(minLength: 8)
 
                                 GitChip(info: gitInfo(for: session))
+
+                                Button("清单") { onOpenLedger(session) }
+                                    .buttonStyle(.borderless)
+                                    .font(.system(size: 12, weight: .medium))
 
                                 Button("跳转") { onJump(session.sessionId) }
                                     .buttonStyle(.borderless)
@@ -666,8 +696,54 @@ struct SettingsPane: View {
     let projects: ProjectStore
     let git: GitAccountStore
     @Bindable var placement: IslandPlacementStore
+    let channels: HookChannelMonitor
 
     @State private var hookStatus: String = "检查中…"
+
+    /// hook 通道健康度。
+    ///
+    /// `hubctl doctor` 只能回答"socket 通不通"。但链路断掉的方式远不止这一种：
+    /// settings.json 被别的工具覆盖、event 名字拼错、Claude Code 改了名 ——
+    /// 这几种情况下 socket 是通的、doctor 是绿的，而那一类事件一条都收不到，
+    /// 验收清单会安静地不工作。
+    ///
+    /// **只有真收到过事件才能证明通了。** 所以这里显示的是实际到达数，不是配置项。
+    @ViewBuilder
+    private var hookChannels: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Hook 通道")
+                .font(.system(size: 14, weight: .semibold))
+            Text("显示的是**实际收到过的事件数**，不是配置里写了什么 —— 配置对而链路断是最常见的故障。")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+
+            ForEach(HookChannelMonitor.expected, id: \.self) { kind in
+                let count = channels.counts[kind] ?? 0
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(count > 0 ? IslandTheme.shell : Color.secondary.opacity(0.35))
+                        .frame(width: 6, height: 6)
+                    Text(HookChannelMonitor.label(for: kind))
+                        .font(.system(size: 12))
+                    Spacer()
+                    if let last = channels.lastSeen[kind] {
+                        Text(last, style: .relative)
+                            .font(.system(size: 11)).monospacedDigit()
+                            .foregroundStyle(.tertiary)
+                    }
+                    Text(count > 0 ? "\(count)" : "未收到")
+                        .font(.system(size: 11, weight: count > 0 ? .medium : .regular))
+                        .monospacedDigit()
+                        .foregroundStyle(count > 0 ? .secondary : .tertiary)
+                }
+            }
+
+            Text("计数从 Claude Hub 启动时开始。刚装完 hook 的话，新开一个会话才会亮。")
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+                .padding(.top, 2)
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -675,6 +751,7 @@ struct SettingsPane: View {
 
             ScrollView {
                 VStack(spacing: 12) {
+                    Card { hookChannels }
                     Card {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("灵动岛位置").font(.system(size: 14, weight: .semibold))

@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let prompts = AgentPromptCoordinator()
     private let notifications = HubNotificationCenter()
     private let placement = IslandPlacementStore()
+    private let acceptance = AcceptanceStore()
 
     private lazy var island = IslandController(
         store: store, approvals: approvals, prompts: prompts, projects: projects,
@@ -33,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private lazy var hooks = HookCoordinator(
         store: store, approvals: approvals, prompts: prompts,
-        notifications: notifications, projects: projects
+        notifications: notifications, projects: projects, acceptance: acceptance
     )
     private lazy var dispatch = TerminalDispatch()
     private lazy var stalls = StallWatcher(store: store)
@@ -256,6 +257,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             projects: projects,
             approvals: approvals,
             placement: placement,
+            acceptance: acceptance,
+            channels: hooks.channels,
             onJump: { [weak self] sessionId in
                 self?.store.jump(to: sessionId)
             },

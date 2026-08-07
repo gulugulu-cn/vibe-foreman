@@ -18,6 +18,30 @@ public struct HookEvent: Codable, Sendable {
         case preToolUse
         /// 会话结束，用于即时清理 UI。
         case sessionEnd
+        /// 用户敲了回车提交一句话。
+        ///
+        /// **只采集，不干预** —— 这个 hook 的 stdout 会被 Claude 当成附加 context
+        /// 注入进对话，所以它这条链路一个字都不能往 stdout 打（配 `async: true` 双保险）。
+        ///
+        /// 它是验收清单的两个作用：把用户原话存进清单缓冲；给 Stop 的拦截「上膛」。
+        /// 后者是防死循环的结构性保证 —— 只有用户说话能上膛，Claude 没有任何路径
+        /// 能给自己上膛，详见 `AcceptanceStore` 里那一段。
+        case userPromptSubmit
+        /// 会话开始。Hub 借它做项目配置检查，也是「通道健康度」的起点。
+        case sessionStart
+        /// 工具调用**之后**。
+        ///
+        /// 这一条对验收清单的价值最大：Write / Edit 之后 Hub 能**第一手**知道
+        /// 哪个文件被改了，不用回头问 Claude "你改了什么"。
+        /// 转述那一步正是失真发生的地方。
+        case postToolUse
+        /// 子 agent 收工。
+        case subagentStop
+        /// 上下文即将被压缩。
+        ///
+        /// 压缩正是"遗忘"最集中发生的时刻 —— Claude 记不住的东西，
+        /// Hub 的清单记得住。
+        case preCompact
     }
 
     public let kind: Kind
@@ -37,6 +61,17 @@ public struct HookEvent: Codable, Sendable {
     /// 通知正文直接用它，替掉旧实现那 5 条随机中文文案（信息量为零）。
     public let lastAssistantMessage: String?
     public let stopReason: String?
+    /// Claude 是不是**已经**因为 Stop hook 而在续跑了。
+    ///
+    /// 用来避免"拦了又拦"。但**绝不能只靠它** —— 这个字段在本机没验证过，
+    /// 不同 CLI 版本给不给都不确定。真正的保证是 Hub 侧的上膛机制。
+    /// 它在这里只是第二道。
+    public let stopHookActive: Bool?
+
+    // MARK: userPromptSubmit
+
+    /// 用户刚提交的那句原话。验收清单的基线就取自它。
+    public let promptText: String?
 
     // MARK: notification
 
@@ -72,6 +107,8 @@ public struct HookEvent: Codable, Sendable {
         permissionMode: String? = nil,
         lastAssistantMessage: String? = nil,
         stopReason: String? = nil,
+        stopHookActive: Bool? = nil,
+        promptText: String? = nil,
         notificationType: String? = nil,
         message: String? = nil,
         toolName: String? = nil,
@@ -89,6 +126,8 @@ public struct HookEvent: Codable, Sendable {
         self.permissionMode = permissionMode
         self.lastAssistantMessage = lastAssistantMessage
         self.stopReason = stopReason
+        self.stopHookActive = stopHookActive
+        self.promptText = promptText
         self.notificationType = notificationType
         self.message = message
         self.toolName = toolName

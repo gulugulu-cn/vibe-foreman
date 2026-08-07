@@ -96,16 +96,31 @@ def install(event, argument, *, blocking):
     entries.append({"hooks": [hook]})
     hooks[event] = entries
 
-install("Stop", "stop", blocking=False)
-install("Notification", "notification", blocking=False)
-install("SessionEnd", "sessionend", blocking=False)
+# 全部九类 hook 都装上。
+#
+# 只装用得着的那几类是个诱人的省事做法，但它让"这一类到底通不通"无从判断 ——
+# 收不到事件时分不清是"没装"还是"装了但链路断了"。全装上之后，
+# 设置页的通道健康度才有意义：每一行要么亮过，要么就是真有问题。
+#
+# ⚠️ UserPromptSubmit / SessionStart 的 stdout 会被 Claude 当成**附加 context
+# 注入进对话**。hubctl 在这些链路上一个字都不往 stdout 打，
+# async: True 是第二道保险（异步 hook 的输出会被直接忽略）。
+install("SessionStart", "sessionstart", blocking=False)
+install("UserPromptSubmit", "userprompt", blocking=False)
 install("PreToolUse", "pretool", blocking=True)
+install("PostToolUse", "posttool", blocking=False)
+install("Notification", "notification", blocking=False)
+install("Stop", "stop", blocking=False)
+install("SubagentStop", "subagentstop", blocking=False)
+install("PreCompact", "precompact", blocking=False)
+install("SessionEnd", "sessionend", blocking=False)
 
 with open(path, "w") as handle:
     json.dump(settings, handle, indent=2, ensure_ascii=False)
     handle.write("\n")
 
-print("已配置 hook：Stop / Notification / SessionEnd / PreToolUse")
+print("已配置 9 类 hook：SessionStart / UserPromptSubmit / PreToolUse / PostToolUse")
+print("                  Notification / Stop / SubagentStop / PreCompact / SessionEnd")
 PYTHON
 
 ok "已更新 $SETTINGS"

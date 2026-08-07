@@ -63,6 +63,8 @@ private func makeEvent(kind: HookEvent.Kind, payload: [String: Any]) -> HookEven
         permissionMode: string(payload, "permission_mode"),
         lastAssistantMessage: string(payload, "last_assistant_message"),
         stopReason: string(payload, "stop_reason"),
+        stopHookActive: payload["stop_hook_active"] as? Bool,
+        promptText: string(payload, "prompt"),
         notificationType: string(payload, "notification_type"),
         message: string(payload, "message"),
         toolName: string(payload, "tool_name"),
@@ -129,6 +131,11 @@ private func runHook(_ name: String) -> Int32 {
     case "notification", "notify": kind = .notification
     case "pretool", "pretooluse": kind = .preToolUse
     case "sessionend": kind = .sessionEnd
+    case "userprompt", "userpromptsubmit": kind = .userPromptSubmit
+    case "sessionstart": kind = .sessionStart
+    case "posttool", "posttooluse": kind = .postToolUse
+    case "subagentstop": kind = .subagentStop
+    case "precompact": kind = .preCompact
     default:
         FileHandle.standardError.write(Data("未知的 hook 类型：\(name)\n".utf8))
         return 0   // 仍然放行
@@ -194,7 +201,11 @@ let args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
 case "hook":
     guard args.count >= 2 else {
-        FileHandle.standardError.write(Data("用法：hubctl hook <stop|notification|pretool>\n".utf8))
+        FileHandle.standardError.write(Data("""
+        用法：hubctl hook <stop|notification|pretool|posttool|sessionstart\
+        |sessionend|userprompt|subagentstop|precompact>
+
+        """.utf8))
         exit(0)
     }
     exit(runHook(args[1]))

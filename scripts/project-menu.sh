@@ -17,6 +17,14 @@ cd "$DIR" 2>/dev/null || exit 1
 
 # 自定位 hub scripts 目录（支持任意安装位置）
 HUB_SCRIPTS_DIR="${HUB_SCRIPTS_DIR:-$(cd "$(dirname "$0")" && pwd)}"
+
+# 启动前先把项目配置补齐（防污染 deny + 全套 hook）。
+#
+# 必须在这里而不是在选了 1/2 之后：这个脚本下面有 30 秒超时的菜单，
+# 补配置放到超时之后就可能根本轮不到执行。
+# 不阻断 —— 补不上也只打一行，绝不让项目起不来。
+bash "$HUB_SCRIPTS_DIR/ensure-project-config.sh" "$DIR" 2>/dev/null || true
+
 export PATH="$HUB_SCRIPTS_DIR:$PATH"
 alias hub-notify="bash $HUB_SCRIPTS_DIR/hub-notify.sh"
 alias hub-run="bash $HUB_SCRIPTS_DIR/hub-run.sh"

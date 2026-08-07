@@ -122,12 +122,42 @@ public struct TerminalDispatch: Sendable {
             break
         }
 
+        // 起 claude 之前先把项目配置补齐（防污染 deny + 全套 hook）。
+        //
+        // **这条路必须单独补一次。** app 从岛/主窗口启动项目时**完全不经过**
+        // project-menu.sh —— 那个脚本只有 tmux 手动开的路径会走。
+        // 漏了这里的话，凡是从 Hub 界面点开的项目一个都没被检查过，
+        // 而那正是最常用的入口。
+        ensureProjectConfig(path)
+
         let inner = mode.command(sessionId: sessionId)
 
         if hubSessionExists() {
             return addWindow(name: name, path: path, command: inner)
         }
         return createSession(name: name, path: path, command: inner)
+    }
+
+    /// 补齐项目的 `.claude/settings.json`（防污染 deny + 全套 hook）。
+    ///
+    /// 脚本自己是幂等的、也自己兜底不阻断，所以这里失败了什么都不用做 ——
+    /// 让项目起不来的代价远大于少一次配置检查。
+    private func ensureProjectConfig(_ path: String) {
+        guard let script = Self.locateScript("ensure-project-config.sh") else { return }
+        _ = Shell.run("/bin/bash", [script, path], timeout: 10)
+    }
+
+    /// 找 hub 的脚本目录。
+    ///
+    /// **不能靠 PATH 或相对路径**：Hub 是 GUI app，从 launchd 起，
+    /// 工作目录和 PATH 都不是终端里那一套（`StallJudge.locateClaude` 同理）。
+    static func locateScript(_ name: String) -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = [
+            "\(home)/Documents/code/claude-hub/scripts/\(name)",
+            "\(home)/.local/share/claude-hub/scripts/\(name)",
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     private func hubSessionExists() -> Bool {

@@ -79,25 +79,12 @@ EOF
 
 # 防污染配置 + 项目内记忆目录
 if [ "$DENY" = 1 ]; then
-  mkdir -p .claude/memory
-  touch .claude/memory/.gitkeep
-  cat > .claude/settings.json <<'EOF'
-{
-  "_doc": "项目级防污染配置：项目知识只落项目内（见 autoMemoryDirectory），禁止写进宿主机 ~/.claude/（那是全局面，写进去会污染其他项目的会话）。只写 Edit 规则、不写 Write 规则：Edit(path) 已经覆盖所有文件编辑工具（含 Write），而单独的 Write(path) 规则不被权限检查识别，加了只会每次调用都刷警告。注意：~/.claude/plans/ 不能列入 deny——plan mode 的计划文件就写在那里，禁了它所有 plan 会话都会报 Error writing file（真踩过）。deny 与 autoMemoryDirectory 必须成对存在——只禁不给去处等于把记忆扔了。",
-  "autoMemoryDirectory": "./.claude/memory",
-  "permissions": {
-    "deny": [
-      "Edit(~/.claude/agents/**)",
-      "Edit(~/.claude/skills/**)",
-      "Edit(~/.claude/commands/**)",
-      "Edit(~/.claude/projects/*/memory/**)",
-      "Edit(~/.claude/CLAUDE.md)"
-    ]
-  }
-}
-EOF
-  ok "已写入 .claude/settings.json（防污染 deny + 项目内记忆目录）"
+  # 模板只留一份 —— 由 ensure-project-config.sh 维护（启动路径也调它，
+  # 两边各写一份必然漂移）。它自己会建 .claude/memory 和补 deny + 全套 hook。
+  bash "$(cd "$(dirname "$0")" && pwd)/ensure-project-config.sh" "$TARGET"
+  ok "已写入 .claude/settings.json（防污染 deny + 全套 hook + 项目内记忆目录）"
 fi
+
 
 git add -A
 git commit -qm "init: $NAME"

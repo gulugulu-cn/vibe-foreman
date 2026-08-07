@@ -205,21 +205,7 @@ public actor StallJudge {
     /// 模型仍然会包一层 ```json … ```。不剥的话解析必然失败，
     /// AI 这一层就等于完全没生效。
     static func parse(_ raw: String) -> StallSummary? {
-        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if text.hasPrefix("```") {
-            // 去掉首行的 ```json / ``` 和末尾的 ```
-            var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-            lines.removeFirst()
-            if lines.last?.trimmingCharacters(in: .whitespaces).hasPrefix("```") == true {
-                lines.removeLast()
-            }
-            text = lines.joined(separator: "\n")
-        }
-
-        guard let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)),
-              let dict = object as? [String: Any]
-        else { return nil }
+        guard let dict = ModelOutput.extractJSONObject(raw) else { return nil }
 
         // 字数限制**必须在这边再截一次**，不能指望模型守约：实测它给了
         // 5 个选项（要求最多 4 个）、14 字的 nextAction（要求 ≤10 字）。

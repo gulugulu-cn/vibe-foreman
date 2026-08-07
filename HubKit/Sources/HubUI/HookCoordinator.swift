@@ -1,6 +1,7 @@
 import Foundation
 import HubCore
 import HubIPC
+import HubProbe
 import HubProjects
 
 /// 把 hook 事件接到 UI 上。
@@ -14,7 +15,18 @@ public final class HookCoordinator {
     private let prompts: AgentPromptCoordinator
     private let notifications: HubNotificationCenter
     private let projects: ProjectStore
+    private let acceptance: AcceptanceStore
     private var server: HubSocketServer?
+
+    /// 每类 hook 最后一次收到事件的时间。设置页用它显示通道健康度 ——
+    /// 「配好了」和「真的在通」是两回事，只有后者能证明链路活着。
+    public let channels = HookChannelMonitor()
+
+    private let dedup = HookDedup()
+    private let extractor = AcceptanceExtractor()
+    /// 正在拆解中的项目。同一个项目的拆解不并发跑 —— 两次并发会拿到同一份
+    /// 原话缓冲，把同一批要点拆两遍（去重能挡住重复入库，但白烧一次额度）。
+    private var extracting: Set<String> = []
 
     /// 触发灵动岛闯入。
     public var onIntrusion: ((IntrusionEvent) -> Void)?
@@ -37,13 +49,15 @@ public final class HookCoordinator {
         approvals: ApprovalCoordinator,
         prompts: AgentPromptCoordinator,
         notifications: HubNotificationCenter,
-        projects: ProjectStore
+        projects: ProjectStore,
+        acceptance: AcceptanceStore
     ) {
         self.store = store
         self.approvals = approvals
         self.prompts = prompts
         self.notifications = notifications
         self.projects = projects
+        self.acceptance = acceptance
     }
 
     public func start() {
@@ -71,7 +85,27 @@ public final class HookCoordinator {
 
     // MARK: - 事件分发
 
+    /// 去重 → 分发。
+    ///
+    /// 去重必须包在最外层：hook 配置是叠加的（全局 + 项目级都会跑一遍，本机实测确认），
+    /// 同一个事件进来两次。详见 `HookDedup`。
     private nonisolated func handle(_ event: HookEvent) -> HookDecision {
+        Task { @MainActor in self.channels.record(event.kind) }
+
+        guard let key = HookDedup.key(for: event) else { return dispatch(event) }
+
+        switch dedup.begin(key, waitForDecision: event.kind == .preToolUse) {
+        case .duplicate(let decision):
+            HubLog.ipc.notice("去重：\(event.kind.rawValue, privacy: .public) 重复事件")
+            return decision ?? .allow
+        case .first:
+            let decision = dispatch(event)
+            dedup.finish(key, decision: decision)
+            return decision
+        }
+    }
+
+    private nonisolated func dispatch(_ event: HookEvent) -> HookDecision {
         switch event.kind {
         case .stop:
             Task { @MainActor in self.handleStop(event) }
@@ -83,6 +117,24 @@ public final class HookCoordinator {
 
         case .sessionEnd:
             Task { @MainActor in self.store.refresh() }
+            return .allow
+
+        case .userPromptSubmit:
+            Task { @MainActor in self.handleUserPrompt(event) }
+            return .allow
+
+        case .sessionStart:
+            Task { @MainActor in self.store.refresh() }
+            return .allow
+
+        case .postToolUse:
+            Task { @MainActor in self.handlePostToolUse(event) }
+            return .allow
+
+        case .subagentStop, .preCompact:
+            // 目前只用来点亮通道健康度（上面 handle 里已经记过）。
+            // preCompact 之后 Claude 会忘掉一大段上下文 —— 而清单不会，
+            // 这正是它存在的意义，不需要额外动作。
             return .allow
 
         case .preToolUse:
@@ -111,6 +163,102 @@ public final class HookCoordinator {
                     title: title, detail: "\(project) · \(body)"
                 )
             )
+        }
+    }
+
+    /// 用户提交了一句话。
+    ///
+    /// 这个 handler 干两件事，**都必须极快**（这条 hook 挡在用户和 Claude 之间）：
+    /// 1. 把原话原样记进清单缓冲 —— 零成本，不调模型；
+    /// 2. 给这个会话的拦截「上膛」。
+    ///
+    /// 第 2 件是全案防死循环的结构性保证：`UserPromptSubmit` 是**唯一**的上膛入口，
+    /// 而它只在用户敲回车时触发。Claude 没有任何路径能给自己上膛，
+    /// 所以「拦一次 → 它回一轮 → 又拦」这个循环构造不出来。详见 `AcceptanceStore`。
+    ///
+    /// 拆解是异步的：它要花几秒到几十秒，绝不能挡在这里。等 Claude 干完活
+    /// （通常几分钟），拆解早就完成了。
+    @MainActor
+    private func handleUserPrompt(_ event: HookEvent) {
+        acceptance.arm(sessionId: event.sessionId)
+
+        guard let text = event.promptText?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty
+        else { return }
+
+        let path = AcceptanceStore.projectPath(forCWD: event.cwd, projects: projects)
+        acceptance.recordPrompt(
+            RawPrompt(text: text, sessionId: event.sessionId), in: path
+        )
+        scheduleExtraction(projectPath: path, plan: nil)
+    }
+
+    /// 工具跑完了。
+    ///
+    /// **这是"实际功能证明"最便宜的一半。** Write / Edit 之后 Hub 第一手知道
+    /// 哪个文件被改了 —— 不用回头问 Claude"你改了什么"，而转述那一步正是
+    /// 失真发生的地方。这些文件后面会交给旁路复核去和清单对号。
+    @MainActor
+    private func handlePostToolUse(_ event: HookEvent) {
+        guard let toolName = event.toolName, Self.editingTools.contains(toolName),
+              let path = event.toolSummary, path.hasPrefix("/")
+        else { return }
+        acceptance.recordTouchedFile(path, sessionId: event.sessionId)
+    }
+
+    /// 会改代码的工具。`toolSummary` 对这几个提取的正是 `file_path`。
+    static let editingTools: Set<String> = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
+
+    /// 把缓冲里的原话（和可选的计划全文）拆成要点，合并进清单。
+    @MainActor
+    private func scheduleExtraction(projectPath: String, plan: String?) {
+        guard !extracting.contains(projectPath) else { return }
+
+        let ledger = acceptance.ledger(for: projectPath)
+        let prompts = ledger.rawPrompts
+        guard !prompts.isEmpty || plan != nil else { return }
+        let existing = ledger.items.map(\.text)
+        // 只清掉这次真正喂进去的那些。拆解期间用户可能又说了话，
+        // 按时间截断而不是整个清空，才不会把新说的一起丢掉。
+        let cutoff = prompts.last?.at ?? Date()
+
+        extracting.insert(projectPath)
+        let extractor = self.extractor
+
+        Task.detached(priority: .utility) {
+            let points: [ExtractedPoint]?
+            if await extractor.shouldExtract(prompts: prompts, plan: plan) {
+                points = await extractor.extract(
+                    prompts: prompts, plan: plan, existing: existing
+                )
+            } else {
+                // 太短、或功能没开 —— 不是失败，原话继续攒着等下一次。
+                points = nil
+            }
+
+            await MainActor.run {
+                self.extracting.remove(projectPath)
+                // nil = 这次没跑成。**原话必须留着** —— 它是这个功能唯一的基线来源，
+                // 一次失败就丢掉的话，用户说过的要求就永远找不回来了。
+                guard let points else { return }
+
+                self.acceptance.clearPrompts(upTo: cutoff, in: projectPath)
+                guard !points.isEmpty else { return }
+                self.acceptance.merge(
+                    points.map {
+                        AcceptanceItem(
+                            text: $0.text,
+                            acceptance: $0.acceptance,
+                            origin: $0.inferred ? .inferred : (plan != nil ? .plan : .userPrompt),
+                            baselineCommit: nil
+                        )
+                    },
+                    into: projectPath
+                )
+                HubLog.app.notice(
+                    "验收清单：\(projectPath, privacy: .public) 新增 \(points.count, privacy: .public) 条"
+                )
+            }
         }
     }
 
@@ -255,6 +403,22 @@ public final class HookCoordinator {
             self.onPromptNeeded?()
             result = await self.prompts.requestDecision(for: request)
             semaphore.signal()
+
+            // 计划全文进验收清单 —— 这是权威性最高的基线来源（用户明确批准过的）。
+            //
+            // 两个时机上的讲究：
+            // - **在 signal 之后**：拆解要起一个 claude 子进程，绝不能拖着 hubctl 等；
+            // - **只在没被驳回时**：驳回的计划不是基线，是被否掉的方案。
+            //   passthrough（用户跑去终端自己确认）也算数 —— 那种情况 Hub 看不到
+            //   最终结果，但用户既然没在岛上按驳回，按批准处理比丢掉更合理。
+            if case .plan(let text) = payload, result.verdict != .deny {
+                self.scheduleExtraction(
+                    projectPath: AcceptanceStore.projectPath(
+                        forCWD: event.cwd, projects: self.projects
+                    ),
+                    plan: text
+                )
+            }
         }
 
         if semaphore.wait(timeout: .now() + HookTimeouts.serverBridge) == .timedOut {
