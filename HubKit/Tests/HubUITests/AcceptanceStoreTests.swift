@@ -239,6 +239,45 @@ final class AcceptanceStoreTests: XCTestCase {
         XCTAssertTrue(text.contains("另有 6 条未列出"), "省略了多少必须说出来")
     }
 
+    /// **老实回答「没做」不能被惩罚。**
+    ///
+    /// 答 false 的项保持 `.open`，而 `.open` 正是注入的筛选条件 ——
+    /// 不轮换的话每一轮问的都是同一批，后面的要点一次都轮不到。
+    /// 实测在我自己身上撞到：连着两轮被问了一模一样的 6 条。
+    func testInjectionRotatesInsteadOfAskingTheSameOnesForever() {
+        let store = AcceptanceStore(directory: nil)
+        for index in 0..<12 {
+            store.add(AcceptanceItem(text: "要点 \(index)", origin: .userPrompt), to: project)
+        }
+
+        let first = store.injectionText(for: project) ?? ""
+        let second = store.injectionText(for: project) ?? ""
+
+        let firstIDs = store.ledger(for: project).items
+            .filter { first.contains($0.id) }.map(\.id)
+        let secondIDs = store.ledger(for: project).items
+            .filter { second.contains($0.id) }.map(\.id)
+
+        XCTAssertEqual(Set(firstIDs).intersection(secondIDs).count, 0, "第二轮该问没问过的那批")
+        XCTAssertEqual(secondIDs.count, 6)
+    }
+
+    /// 问过 3 次还说没做的，停止再问并标成「疑似误拆」。
+    ///
+    /// 多半不是它偷懒，是这条要点本身拆偏了（实测真发生过：用户说
+    /// 「加个人工确认吧 不然都清理不掉了」被拆成了「清理操作前增加确认步骤」）。
+    /// 继续问只是一轮轮浪费，还把真正该问的挤出去。
+    func testGivesUpOnItemsAnsweredNotDoneThreeTimes() {
+        let store = AcceptanceStore(directory: nil)
+        let item = pendingItem("这条大概率拆错了")
+        store.add(item, to: project)
+
+        for _ in 0..<3 { _ = store.injectionText(for: project) }
+
+        XCTAssertTrue(store.ledger(for: project).items.first?.likelyMisextracted ?? false)
+        XCTAssertNil(store.injectionText(for: project), "问过 3 次就别再问了")
+    }
+
     /// 存疑的必须排在注入正文最前面。
     ///
     /// 那一档是「自报做完但代码里找不到」—— 最该先说清楚的一类，

@@ -339,7 +339,10 @@ public final class AcceptanceStore {
     /// - 结尾要求"输出完就停下"—— 否则它会顺手去补做遗漏项，
     ///   自查回答反而收不到（这个降级可以接受，但不该是默认行为）。
     public func injectionText(for projectPath: String) -> String? {
-        let pending = ledger(for: projectPath).items.filter(\.needsAttention)
+        // 问过 3 次还是「没做」的排除掉：多半不是它偷懒，是这条拆错了。
+        // 继续问只会一轮轮浪费，还把真正该问的挤出去。
+        let pending = ledger(for: projectPath).items
+            .filter { $0.needsAttention && !$0.likelyMisextracted }
         guard !pending.isEmpty else { return nil }
 
         // 一次最多摆这么多条。
@@ -348,10 +351,27 @@ public final class AcceptanceStore {
         // 要点一多就没人看（Claude 也一样），反而比不拦更容易被忽略。
         // 存疑的排前面：那一档是「自报做完但代码里找不到」，最该先说清楚。
         let cap = 6
+        // 存疑的优先；其余按**最久没问过**的排前面。
+        //
+        // 不轮换的话每轮问的都是同一批：老实答「没做」的条目保持 .open，
+        // 于是它们永远排在前面，后面的要点一次都轮不到 ——
+        // **诚实反而被惩罚**。实测在我自己身上撞到过。
         let ordered = pending.sorted { left, right in
-            (left.status == .disputed ? 0 : 1) < (right.status == .disputed ? 0 : 1)
+            let leftDisputed = left.status == .disputed
+            let rightDisputed = right.status == .disputed
+            if leftDisputed != rightDisputed { return leftDisputed }
+            return (left.lastAskedAt ?? .distantPast) < (right.lastAskedAt ?? .distantPast)
         }
         let shown = Array(ordered.prefix(cap))
+
+        // 记下这一轮问了谁。没有这一步，上面的轮换排序就没有依据。
+        let asked = Set(shown.map(\.id))
+        mutate(projectPath) { ledger in
+            for index in ledger.items.indices where asked.contains(ledger.items[index].id) {
+                ledger.items[index].lastAskedAt = Date()
+                ledger.items[index].askCount += 1
+            }
+        }
 
         var lines = shown.map { item -> String in
             let condition = item.acceptance.map { "（验收条件：\($0)）" } ?? ""

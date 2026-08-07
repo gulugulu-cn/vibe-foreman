@@ -147,6 +147,14 @@ public struct AcceptanceItem: Codable, Sendable, Identifiable, Equatable {
     public let createdAt: Date
     public var updatedAt: Date
     public let sourceSessionId: String?
+    /// 上一次被塞进注入正文的时间。nil = 还没问过。
+    ///
+    /// 用来轮换。没有它的话，注入永远取排在前面的那 6 条 ——
+    /// 老实回答「没做」的条目保持 `.open`，于是每一轮问的都是同一批，
+    /// 后面的永远轮不到。**诚实反而被惩罚**，这是实测撞到的。
+    public var lastAskedAt: Date?
+    /// 一共被问过几次。
+    public var askCount: Int
     /// 入库时的 HEAD。diff 回溯的起点 —— 没有它就没法回答"这条要点之后代码变了什么"。
     public var baselineCommit: String?
 
@@ -162,8 +170,12 @@ public struct AcceptanceItem: Codable, Sendable, Identifiable, Equatable {
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         sourceSessionId: String? = nil,
-        baselineCommit: String? = nil
+        baselineCommit: String? = nil,
+        lastAskedAt: Date? = nil,
+        askCount: Int = 0
     ) {
+        self.lastAskedAt = lastAskedAt
+        self.askCount = askCount
         self.id = id
         self.text = text
         self.acceptance = acceptance
@@ -196,7 +208,14 @@ public struct AcceptanceItem: Codable, Sendable, Identifiable, Equatable {
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
         sourceSessionId = try container.decodeIfPresent(String.self, forKey: .sourceSessionId)
         baselineCommit = try container.decodeIfPresent(String.self, forKey: .baselineCommit)
+        lastAskedAt = try container.decodeIfPresent(Date.self, forKey: .lastAskedAt)
+        askCount = try container.decodeIfPresent(Int.self, forKey: .askCount) ?? 0
     }
+
+    /// 问过好几次它都说没做 —— 多半不是它偷懒，是这条要点本身拆错了。
+    ///
+    /// 继续问下去只会一轮轮浪费，还把真正该问的挤出去。标出来让用户去处理。
+    public var likelyMisextracted: Bool { askCount >= 3 && status == .open }
 
     /// 把一条塞了好几件事的要点拆开。
     ///

@@ -477,6 +477,16 @@ struct AcceptancePane: View {
                                 )
                         }
 
+                        // 问过 3 次都说没做 —— 多半是这条拆错了，不是它偷懒。
+                        // 必须标出来：它已经被排除出注入了，不标的话就是安静地
+                        // 消失，用户永远不知道有一条要点再也不会被问。
+                        if item.likelyMisextracted {
+                            Text("疑似误拆")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(IslandTheme.danger)
+                                .help("问了 \(item.askCount) 次都回答没做，可能这条要点本身就拆偏了。看一眼，不对就划掉。")
+                        }
+
                         Text(item.origin.label)
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
