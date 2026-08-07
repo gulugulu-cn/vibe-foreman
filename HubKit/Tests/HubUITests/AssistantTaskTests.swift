@@ -34,11 +34,15 @@ final class AssistantTaskTests: XCTestCase {
         XCTAssertEqual(AcceptanceItem.Origin.assistantTask.label, "AI 计划")
     }
 
-    /// 上一轮没做完、这一轮 Claude 自己勾掉了的，要跟着变成已确认。
+    /// **Claude 勾掉的进「待复核」，不是「已验收」。**
     ///
-    /// 不同步的话它们会永远挂在「未验收」，用户得手动一条条清 ——
-    /// 清不动的清单最后就没人看了。
-    func testTasksClaudeFinishedAreSynced() {
+    /// 它勾自己的框和它嘴上说"做完了"是同一性质的东西：都是声明，都没有外部
+    /// 证据。一开始我把 done 的直接记成 `.confirmed`，理由是"勾状态是它边干边
+    /// 写进文件的，比嘴上说可信"—— 这个理由站不住，而且正是这整个功能要防的事。
+    ///
+    /// 用户的原话：「他勾掉的到底有没有做」。这个问题只有 diff 能回答，
+    /// 所以要落到 `.claimed` 让旁路复核去判。
+    func testTasksClaudeCheckedOffGoToReviewNotDone() {
         let store = AcceptanceStore(directory: nil)
         store.add(task("写数据层"), to: project)
         store.add(task("接 UI"), to: project)
@@ -46,7 +50,9 @@ final class AssistantTaskTests: XCTestCase {
         store.syncAssistantTasks(done: ["写数据层"], in: project)
 
         let items = store.ledger(for: project).items
-        XCTAssertEqual(items.first { $0.text == "写数据层" }?.status, .confirmed)
+        let checked = items.first { $0.text == "写数据层" }
+        XCTAssertEqual(checked?.status, .claimed, "它勾的框是声明，不是证据")
+        XCTAssertFalse(checked?.hasProof ?? true, "自己勾的框不算实证")
         XCTAssertEqual(items.first { $0.text == "接 UI" }?.status, .open)
     }
 

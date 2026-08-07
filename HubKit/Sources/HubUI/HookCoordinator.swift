@@ -247,22 +247,34 @@ public final class HookCoordinator {
     /// 「它自己列了 6 项，做完 3 项就说完事了」是遗漏最直接的证据，
     /// 而这类承诺不在用户原话里，别处根本抓不到。所以收，但单独标成「AI 计划」。
     ///
-    /// 已完成的直接记成已确认：那是 Claude 自己勾掉的，和它嘴上说做完了不一样 ——
-    /// 勾状态是它边干边写进文件的，事后改动的动机低得多。但仍然只算
-    /// `.confirmed` 而不是 `.accepted`，终裁权还在用户手上。
+    /// ## 勾掉的进「待复核」，不是「已验收」
+    ///
+    /// 一开始我把 `done` 的直接记成 `.confirmed`，理由是"勾状态是它边干边写进
+    /// 文件的，比嘴上说可信"。**这个理由站不住。** 它勾自己的框和它嘴上说
+    /// "做完了"是同一性质的东西 —— 都是声明，都没有外部证据。
+    /// 拿它自己勾的框当证据，正是这整个功能要防的事，我在这儿又犯了一次。
+    ///
+    /// 所以勾掉的落到 `.claimed`，证据记成 `.claimed(...)`（`isProof == false`），
+    /// 然后由旁路复核拿真实 git diff 去判 confirmed / disputed。
+    /// 用户的原话：「他勾掉的到底有没有做」——这个问题只有 diff 能回答。
     @MainActor
     private func collectAssistantTasks(from event: HookEvent, projectPath: String) {
         let tasks = tasks.readTasks(sessionId: event.sessionId)
         guard !tasks.isEmpty else { return }
+
+        // 基线：这些要点是这一刻入库的，diff 从这里往后算。
+        // 缺了它复核只能拿未提交的改动去比，结论会全是噪音。
+        let baseline = GitDiff.head(projectPath)
 
         acceptance.merge(
             tasks.map { task in
                 AcceptanceItem(
                     text: task.subject,
                     origin: .assistantTask,
-                    status: task.done ? .confirmed : .open,
-                    note: task.done ? "Claude 自己勾了完成" : nil,
-                    sourceSessionId: event.sessionId
+                    status: task.done ? .claimed : .open,
+                    evidence: task.done ? [.claimed("Claude 在自己的 todo 里勾了完成")] : [],
+                    sourceSessionId: event.sessionId,
+                    baselineCommit: baseline
                 )
             },
             into: projectPath

@@ -185,6 +185,21 @@ public final class AcceptanceStore {
         mutate(projectPath) { $0.items.removeAll { $0.id == id } }
     }
 
+    /// 勾/取消勾一个分项。
+    ///
+    /// 全部分项都勾上时**不自动把整条标成已验收** —— 分项是用户手勾的进度记录，
+    /// 而整条的状态要走复核那条路。自动推进的话，勾完最后一格就等于
+    /// 绕过了"拿 diff 核对"这一步。
+    public func togglePart(at index: Int, forID id: String, in projectPath: String) {
+        mutate(projectPath) { ledger in
+            guard let item = ledger.items.firstIndex(where: { $0.id == id }),
+                  ledger.items[item].parts.indices.contains(index)
+            else { return }
+            ledger.items[item].parts[index].done.toggle()
+            ledger.items[item].updatedAt = Date()
+        }
+    }
+
     /// 用户手动改状态。这是终裁，`applyAudit` 不会再动它。
     public func setStatus(_ status: AcceptanceItem.Status, forID id: String, in projectPath: String) {
         mutate(projectPath) { ledger in
@@ -217,13 +232,14 @@ public final class AcceptanceStore {
         }
     }
 
-    /// 同步 Claude 自己勾掉的那些。
+    /// 同步 Claude 自己勾掉的那些 —— 推到**待复核**，不是已验收。
     ///
-    /// 只动 `.assistantTask` 来源、且还没定论的项。上一轮进来时没做完的，
-    /// 这一轮可能已经勾掉了 —— 不同步的话它们会永远挂在「未验收」，
-    /// 用户得手动一条条清，那清单就没人看了。
+    /// 它勾自己的框和它嘴上说"做完了"是同一性质的东西：都是声明，
+    /// 都没有外部证据。推到 `.claimed` 之后由旁路复核拿真实 diff 去判 ——
+    /// 用户要的是「他勾掉的到底有没有做」，这个问题只有 diff 能回答。
     ///
-    /// **不碰用户终裁过的项**，理由同 `applyAudit`。
+    /// 只动 `.assistantTask` 来源、且还没定论的项。**不碰用户终裁过的**，
+    /// 理由同 `applyAudit`。
     public func syncAssistantTasks(done subjects: [String], in projectPath: String) {
         let keys = Set(subjects.map(Self.dedupKey))
         guard !keys.isEmpty else { return }
@@ -232,11 +248,13 @@ public final class AcceptanceStore {
                 let item = ledger.items[index]
                 guard item.origin == .assistantTask,
                       !item.isSettledByUser,
-                      item.status != .confirmed,
+                      item.status == .open,
                       keys.contains(Self.dedupKey(item.text))
                 else { continue }
-                ledger.items[index].status = .confirmed
-                ledger.items[index].note = "Claude 自己勾了完成"
+                ledger.items[index].status = .claimed
+                ledger.items[index].evidence.append(
+                    .claimed("Claude 在自己的 todo 里勾了完成")
+                )
                 ledger.items[index].updatedAt = Date()
             }
         }

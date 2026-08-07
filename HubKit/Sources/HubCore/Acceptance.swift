@@ -42,6 +42,24 @@ public enum Evidence: Codable, Sendable, Equatable {
     }
 }
 
+/// 一条要点里的分项。
+///
+/// Claude 的 todo 经常一条塞好几件事：
+/// 「批次2：设备自动连接（Android 地基修复→状态机→UI→iOS）」是四件。
+/// 整条勾掉时，那四件里做了三件还是四件，从条目本身看不出来 ——
+/// 而漏掉的往往正是最后那件。
+public struct SubPoint: Codable, Sendable, Equatable, Identifiable {
+    public var text: String
+    public var done: Bool
+
+    public var id: String { text }
+
+    public init(text: String, done: Bool = false) {
+        self.text = text
+        self.done = done
+    }
+}
+
 /// 清单里的一个要点。
 ///
 /// 「要点」不等于 Claude 的 TodoWrite 条目。后者是**施工步骤**（"重写轮播箭头"），
@@ -122,6 +140,8 @@ public struct AcceptanceItem: Codable, Sendable, Identifiable, Equatable {
     public var origin: Origin
     public var status: Status
     public var evidence: [Evidence]
+    /// 这条要点里拆出来的分项。空 = 这条本来就是单一的一件事。
+    public var parts: [SubPoint]
     /// 机器给的理由，或用户的批注。
     public var note: String?
     public let createdAt: Date
@@ -137,6 +157,7 @@ public struct AcceptanceItem: Codable, Sendable, Identifiable, Equatable {
         origin: Origin,
         status: Status = .open,
         evidence: [Evidence] = [],
+        parts: [SubPoint] = [],
         note: String? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -149,6 +170,7 @@ public struct AcceptanceItem: Codable, Sendable, Identifiable, Equatable {
         self.origin = origin
         self.status = status
         self.evidence = evidence
+        self.parts = parts.isEmpty ? Self.split(text) : parts
         self.note = note
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -168,12 +190,65 @@ public struct AcceptanceItem: Codable, Sendable, Identifiable, Equatable {
         acceptance = try container.decodeIfPresent(String.self, forKey: .acceptance)
         status = try container.decodeIfPresent(Status.self, forKey: .status) ?? .open
         evidence = try container.decodeIfPresent([Evidence].self, forKey: .evidence) ?? []
+        parts = try container.decodeIfPresent([SubPoint].self, forKey: .parts) ?? []
         note = try container.decodeIfPresent(String.self, forKey: .note)
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
         sourceSessionId = try container.decodeIfPresent(String.self, forKey: .sourceSessionId)
         baselineCommit = try container.decodeIfPresent(String.self, forKey: .baselineCommit)
     }
+
+    /// 把一条塞了好几件事的要点拆开。
+    ///
+    /// 「批次2：设备自动连接（Android 地基修复→状态机→UI→iOS）」拆成四件。
+    /// 整条勾掉时，那四件里做了三件还是四件从条目本身看不出来 ——
+    /// 而漏掉的往往正是最后那件。
+    ///
+    /// ## 为什么是机械切分而不是交给模型
+    ///
+    /// 这一步要对**每一条** todo 都跑，交给模型是每条一次调用。而它要解决的
+    /// 问题很窄：把明确的并列分隔符切开。分隔符切不出来的（"深色模式双端"
+    /// 其实是 iOS + Android）就不切 —— 切错比不切更糟，用户会对着一堆
+    /// 莫名其妙的碎片。
+    ///
+    /// 冒号前的前缀（"批次2："）不算一件事，是标题，切完要去掉。
+    static func split(_ text: String) -> [SubPoint] {
+        // 先剥掉 "批次2：" / "阶段一 - " 这类标题前缀。
+        var body = text
+        for separator in ["：", ":"] where body.contains(separator) {
+            let pieces = body.components(separatedBy: separator)
+            // 只剥第一层，且前缀必须**很短**。
+            //
+            // 标题前缀是「批次2」「阶段一」「T24」这种量级；
+            // 门槛一开始定的 12 字，结果「把整个权限体系重构一遍：改A、改B」
+            // 的前半句被当成标题剥掉了 —— 中文里 11 个字是实打实的内容。
+            if pieces.count >= 2, pieces[0].count <= 6 {
+                body = pieces.dropFirst().joined(separator: separator)
+            }
+            break
+        }
+
+        // 括号里的常常正是并列清单，一起参与切分。
+        body = body
+            .replacingOccurrences(of: "（", with: "、")
+            .replacingOccurrences(of: "(", with: "、")
+            .replacingOccurrences(of: "）", with: "")
+            .replacingOccurrences(of: ")", with: "")
+
+        let delimiters = CharacterSet(charactersIn: "→、;；+/")
+        let pieces = body.components(separatedBy: delimiters)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            // 太短的多半是切碎的噪音（"UI"、"iOS" 例外，所以门槛压到 2）。
+            .filter { $0.count >= 2 }
+
+        // 只有一件事就别拆，返回空表示"这条本来就是单一的"。
+        guard pieces.count >= 2 else { return [] }
+        return pieces.map { SubPoint(text: $0) }
+    }
+
+    /// 分项里做完了几件。没有分项时按整条算。
+    public var partsDone: Int { parts.isEmpty ? (status == .confirmed ? 1 : 0) : parts.filter(\.done).count }
+    public var partsTotal: Int { parts.isEmpty ? 1 : parts.count }
 
     /// 用户终裁过的项。机器结论一律盖不掉 —— 见 `AcceptanceStore.applyAudit`。
     public var isSettledByUser: Bool { status == .accepted || status == .dropped }

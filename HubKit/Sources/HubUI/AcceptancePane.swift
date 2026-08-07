@@ -466,6 +466,17 @@ struct AcceptancePane: View {
 
                         Spacer(minLength: 6)
 
+                        // 一条里塞了几件事必须在行上就看得见 —— 藏在展开区里
+                        // 等于没标：用户不会为了看有没有分项去逐条展开。
+                        if !item.parts.isEmpty {
+                            Text("\(item.partsDone)/\(item.parts.count) 项")
+                                .font(.system(size: 10, weight: .medium)).monospacedDigit()
+                                .foregroundStyle(
+                                    item.partsDone == item.parts.count
+                                        ? IslandTheme.shell : IslandTheme.waiting
+                                )
+                        }
+
                         Text(item.origin.label)
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
@@ -548,6 +559,28 @@ struct AcceptancePane: View {
     @ViewBuilder
     private func detail(_ item: AcceptanceItem) -> some View {
         VStack(alignment: .leading, spacing: 6) {
+            // 分项逐条勾。一条 todo 勾掉时，里面四件做了三件还是四件，
+            // 只有摊开才看得出来 —— 而漏掉的往往正是最后那件。
+            ForEach(Array(item.parts.enumerated()), id: \.offset) { index, part in
+                Button {
+                    togglePart(item, index)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: part.done ? "checkmark.square.fill" : "square")
+                            .font(.system(size: 11))
+                            .foregroundStyle(part.done ? IslandTheme.shell : .secondary)
+                        Text(part.text)
+                            .font(.system(size: 12))
+                            .strikethrough(part.done, color: .secondary)
+                            .foregroundStyle(part.done ? .secondary : .primary)
+                        Spacer()
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+            if !item.parts.isEmpty { Divider().padding(.vertical, 2) }
+
             if let acceptance = item.acceptance {
                 Text("验收条件：\(acceptance)")
                     .font(.system(size: 11, design: .monospaced))
@@ -699,6 +732,11 @@ struct AcceptancePane: View {
 
     private func toggle(_ id: String) {
         if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) }
+    }
+
+    private func togglePart(_ item: AcceptanceItem, _ index: Int) {
+        guard let path = currentPath else { return }
+        acceptance.togglePart(at: index, forID: item.id, in: path)
     }
 
     private func setStatus(_ status: AcceptanceItem.Status, _ item: AcceptanceItem) {
