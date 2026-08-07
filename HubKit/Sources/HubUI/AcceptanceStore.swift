@@ -217,6 +217,45 @@ public final class AcceptanceStore {
         }
     }
 
+    /// 同步 Claude 自己勾掉的那些。
+    ///
+    /// 只动 `.assistantTask` 来源、且还没定论的项。上一轮进来时没做完的，
+    /// 这一轮可能已经勾掉了 —— 不同步的话它们会永远挂在「未验收」，
+    /// 用户得手动一条条清，那清单就没人看了。
+    ///
+    /// **不碰用户终裁过的项**，理由同 `applyAudit`。
+    public func syncAssistantTasks(done subjects: [String], in projectPath: String) {
+        let keys = Set(subjects.map(Self.dedupKey))
+        guard !keys.isEmpty else { return }
+        mutate(projectPath) { ledger in
+            for index in ledger.items.indices {
+                let item = ledger.items[index]
+                guard item.origin == .assistantTask,
+                      !item.isSettledByUser,
+                      item.status != .confirmed,
+                      keys.contains(Self.dedupKey(item.text))
+                else { continue }
+                ledger.items[index].status = .confirmed
+                ledger.items[index].note = "Claude 自己勾了完成"
+                ledger.items[index].updatedAt = Date()
+            }
+        }
+    }
+
+    /// 某个会话里 AI 答应做但还没做的事。
+    ///
+    /// 用于「告知会话」：把这些推回那个终端。按会话而不是按项目 ——
+    /// 用户问的是「这一轮它答应的做全了没」，跨会话混在一起答不了这个问题。
+    public func unfinishedAssistantTasks(sessionId: String, in projectPath: String)
+        -> [AcceptanceItem]
+    {
+        ledger(for: projectPath).items.filter {
+            $0.sourceSessionId == sessionId
+                && $0.origin == .assistantTask
+                && $0.needsAttention
+        }
+    }
+
     /// 去重键：去掉空白和常见标点，忽略大小写。
     ///
     /// 只做到这个程度就够了 —— 真正的语义去重交给拆解那次模型调用

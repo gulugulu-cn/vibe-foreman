@@ -25,6 +25,8 @@ public final class HookCoordinator {
     private let dedup = HookDedup()
     private let extractor = AcceptanceExtractor()
     private let auditor = AcceptanceAuditor()
+    /// 读 Claude 自己的 todo（`~/.claude/tasks/`）。零成本，不调模型。
+    private let tasks = TaskStateReader()
     /// 正在复核中的项目。同一个项目不并发跑，理由同 `extracting`。
     private var auditing: Set<String> = []
     /// 正在拆解中的项目。同一个项目的拆解不并发跑 —— 两次并发会拿到同一份
@@ -177,6 +179,9 @@ public final class HookCoordinator {
 
         let path = AcceptanceStore.projectPath(forCWD: event.cwd, projects: projects)
 
+        // 把 Claude 自己列的 todo 并进清单。零成本，读本地 JSON。
+        collectAssistantTasks(from: event, projectPath: path)
+
         // 先收自查回答，再决定拦不拦。
         //
         // 顺序不能反：上一轮拦下来之后 Claude 的回答就在这条事件的
@@ -229,6 +234,44 @@ public final class HookCoordinator {
         guard let text = acceptance.injectionText(for: projectPath) else { return .allow }
 
         return HookDecision(verdict: .deny, reason: text)
+    }
+
+    /// 把 Claude 自己列的 todo 并进清单。
+    ///
+    /// ## 为什么要收它
+    ///
+    /// 这份清单**不能当基线** —— 用户需求翻译成它的那一步就已经丢东西了。
+    /// 但先前我把它整个排除了，而用户一眼看出问题：清单里全是他说过的话，
+    /// **AI 自己答应要做的事一条都没有**。
+    ///
+    /// 「它自己列了 6 项，做完 3 项就说完事了」是遗漏最直接的证据，
+    /// 而这类承诺不在用户原话里，别处根本抓不到。所以收，但单独标成「AI 计划」。
+    ///
+    /// 已完成的直接记成已确认：那是 Claude 自己勾掉的，和它嘴上说做完了不一样 ——
+    /// 勾状态是它边干边写进文件的，事后改动的动机低得多。但仍然只算
+    /// `.confirmed` 而不是 `.accepted`，终裁权还在用户手上。
+    @MainActor
+    private func collectAssistantTasks(from event: HookEvent, projectPath: String) {
+        let tasks = tasks.readTasks(sessionId: event.sessionId)
+        guard !tasks.isEmpty else { return }
+
+        acceptance.merge(
+            tasks.map { task in
+                AcceptanceItem(
+                    text: task.subject,
+                    origin: .assistantTask,
+                    status: task.done ? .confirmed : .open,
+                    note: task.done ? "Claude 自己勾了完成" : nil,
+                    sourceSessionId: event.sessionId
+                )
+            },
+            into: projectPath
+        )
+        // 已有的那些也要跟着更新状态 —— 上一轮进来时还没做完的，
+        // 这一轮可能已经勾掉了。不同步的话它们会永远挂在「未验收」。
+        acceptance.syncAssistantTasks(
+            done: tasks.filter(\.done).map(\.subject), in: projectPath
+        )
     }
 
     /// 收下 Claude 上一轮的逐条自查回答。

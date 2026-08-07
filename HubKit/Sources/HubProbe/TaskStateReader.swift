@@ -31,6 +31,23 @@ public struct TaskSnapshot: Sendable, Equatable {
     }
 }
 
+/// Claude 自己列的一条任务。
+///
+/// 和 `TaskSnapshot` 的区别：那个只给计数，这个给逐条内容。
+/// 验收清单要的是后者 —— 「它列了 6 项只做了 3 项」这句话里，
+/// 值钱的是**没做的那 3 项分别是什么**，光知道数量没法验收。
+public struct ClaudeTask: Sendable, Equatable {
+    public let order: Int
+    public let subject: String
+    public let done: Bool
+
+    public init(order: Int, subject: String, done: Bool) {
+        self.order = order
+        self.subject = subject
+        self.done = done
+    }
+}
+
 /// 读 `~/.claude/tasks/<会话目录>/<id>.json` —— Claude Code 自己维护的任务清单。
 ///
 /// 这是"这个会话还有后续没做完"的**确定性**判据，不用 AI、不花额度。
@@ -64,6 +81,53 @@ public struct TaskStateReader: Sendable {
         }
         result.append(tasksDirectory.appendingPathComponent(sessionId, isDirectory: true))
         return result
+    }
+
+    /// 逐条读出 Claude 自己列的任务。
+    ///
+    /// ## 为什么验收清单要收它
+    ///
+    /// 这份清单**不能当基线**——用户的需求翻译成它的那一步就已经丢东西了，
+    /// 这正是整个功能存在的理由。但把它整个排除掉也是错的：
+    /// 「它自己列了 6 项，做完 3 项就说完事了」是遗漏最直接的证据，
+    /// 而且这类承诺不在用户的原话里，别处根本抓不到。
+    ///
+    /// 所以它进清单，但**单独标成「AI 计划」**，和用户原话那一档分开显示。
+    ///
+    /// 零成本：读的是本地 JSON，不调模型。
+    public func readTasks(sessionId: String) -> [ClaudeTask] {
+        let fm = FileManager.default
+        guard let dir = candidateDirectories(for: sessionId).first(where: {
+            var isDir: ObjCBool = false
+            return fm.fileExists(atPath: $0.path, isDirectory: &isDir) && isDir.boolValue
+        }) else { return [] }
+
+        guard let entries = try? fm.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        var tasks: [ClaudeTask] = []
+        for file in entries where file.pathExtension == "json" {
+            // 同 read()：单个文件坏掉跳过，别让整个目录失效。
+            guard let data = try? Data(contentsOf: file),
+                  let object = try? JSONSerialization.jsonObject(with: data),
+                  let task = object as? [String: Any],
+                  let status = task["status"] as? String,
+                  let subject = (task["subject"] as? String)?
+                      .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !subject.isEmpty
+            else { continue }
+
+            tasks.append(
+                ClaudeTask(
+                    // 文件名是 "7.json"、"10.json"，按数值排才是真实顺序。
+                    order: Int(file.deletingPathExtension().lastPathComponent) ?? Int.max,
+                    subject: subject,
+                    done: status == "completed"
+                )
+            )
+        }
+        return tasks.sorted { $0.order < $1.order }
     }
 
     public func read(sessionId: String) -> TaskSnapshot? {

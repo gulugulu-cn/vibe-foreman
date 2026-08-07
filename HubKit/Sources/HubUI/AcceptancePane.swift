@@ -29,6 +29,11 @@ struct AcceptancePane: View {
     /// 正在跑验证的那一条。同时只允许跑一条 —— 并发跑 `swift build`
     /// 会互相抢构建目录锁，结果全是假失败。
     @State private var running: String?
+    /// 正在往哪个会话推消息。防连点 —— 注入是往终端敲字，重复注入会串行叠加。
+    @State private var notifying: String?
+
+    /// 往终端注入文字的通道。和岛上「去终端回答」用的是同一条路。
+    private let reply = TerminalReply()
 
     @State private var expanded: Set<String> = []
     @State private var draft = ""
@@ -93,6 +98,7 @@ struct AcceptancePane: View {
             )
 
             if !pickerPaths.isEmpty { controls }
+            sessionPromises
 
             if ledger?.items.isEmpty ?? true {
                 ContentUnavailableView(
@@ -212,6 +218,83 @@ struct AcceptancePane: View {
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 10)
+    }
+
+    // MARK: - AI 答应的事做全了没
+
+    /// 这个项目下每个在跑的会话，AI 自己列的 todo 完成情况。
+    ///
+    /// 单独一条，不混进下面的清单里：用户问的是「**这一轮**它答应的做全了没」，
+    /// 而清单是按项目跨会话累积的，混在一起答不了这个问题。
+    @ViewBuilder
+    private var sessionPromises: some View {
+        let sessions = store.sessions.filter {
+            currentPath != nil
+                && AcceptanceStore.projectPath(forCWD: $0.cwd, projects: projects) == currentPath
+        }
+        if !sessions.isEmpty, let path = currentPath {
+            VStack(spacing: 4) {
+                ForEach(sessions) { session in
+                    let pending = acceptance.unfinishedAssistantTasks(
+                        sessionId: session.sessionId, in: path
+                    )
+                    let total = acceptance.ledger(for: path).items.filter {
+                        $0.sourceSessionId == session.sessionId && $0.origin == .assistantTask
+                    }.count
+                    if total > 0 {
+                        HStack(spacing: 8) {
+                            Image(systemName: pending.isEmpty
+                                ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(
+                                    pending.isEmpty ? IslandTheme.shell : IslandTheme.waiting
+                                )
+                            Text(session.name ?? session.sessionId.prefix(8).description)
+                                .font(.system(size: 12, weight: .medium))
+                            Text(pending.isEmpty
+                                ? "AI 答应的 \(total) 项都做完了"
+                                : "AI 答应了 \(total) 项，还差 \(pending.count) 项")
+                                .font(.system(size: 12)).monospacedDigit()
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            if !pending.isEmpty {
+                                Button(notifying == session.sessionId ? "已发" : "告知这个会话") {
+                                    notify(session: session, pending: pending)
+                                }
+                                .buttonStyle(.borderless)
+                                .font(.system(size: 11, weight: .medium))
+                                .disabled(notifying != nil)
+                            }
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(.background.secondary, in: .rect(cornerRadius: 8))
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 8)
+        }
+    }
+
+    /// 把没做完的推回那个会话的终端。
+    ///
+    /// 走 `TerminalReply.send` 注入到对应 pane —— 不是发通知让用户自己切过去，
+    /// 而是直接把话说到那个 Claude 面前。用户的原话：
+    /// 「可以在这边交互的时候映射到对应的 session 里告知」。
+    private func notify(session: AgentSession, pending: [AcceptanceItem]) {
+        notifying = session.sessionId
+        let lines = pending.prefix(8).map { "- \($0.text)" }.joined(separator: "\n")
+        let more = pending.count > 8 ? "\n（另有 \(pending.count - 8) 项）" : ""
+        let text = """
+        【Claude Hub】你自己列的 todo 里这几项还没做完，逐条确认一下现在的状态：
+        \(lines)\(more)
+        """
+        let reply = self.reply
+        Task {
+            _ = await reply.send(text: text, to: session.sessionId)
+            try? await Task.sleep(for: .seconds(2))
+            notifying = nil
+        }
     }
 
     // MARK: - 项目搜索

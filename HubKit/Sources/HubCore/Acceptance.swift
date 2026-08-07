@@ -59,6 +59,15 @@ public struct AcceptanceItem: Codable, Sendable, Identifiable, Equatable {
         case inferred
         /// 用户手敲的。
         case manual
+        /// **Claude 自己列的 todo。**
+        ///
+        /// 它不能当基线 —— 用户需求翻译成它的那一步就已经丢东西了，
+        /// 这正是整个功能存在的理由。但把它整个排除也是错的：
+        /// 「它自己列了 6 项，做完 3 项就说完事了」是遗漏最直接的证据，
+        /// 而且这类承诺**不在用户的原话里，别处根本抓不到**。
+        ///
+        /// 所以它进清单，但单独标一档，和用户原话那些分开看。
+        case assistantTask
 
         public var label: String {
             switch self {
@@ -66,6 +75,15 @@ public struct AcceptanceItem: Codable, Sendable, Identifiable, Equatable {
             case .plan: return "计划"
             case .inferred: return "推导"
             case .manual: return "手敲"
+            case .assistantTask: return "AI 计划"
+            }
+        }
+
+        /// 来自用户的（权威基线）还是来自 AI 的（待核对的自述）。
+        public var isFromUser: Bool {
+            switch self {
+            case .userPrompt, .plan, .manual: return true
+            case .inferred, .assistantTask: return false
             }
         }
     }
