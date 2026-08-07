@@ -407,13 +407,31 @@ public final class AcceptanceStore {
         )
     }
 
-    /// 从盘上重读一份。文件不存在或坏了就保持内存里的那份不动。
+    /// 从盘上重读一份。文件不存在就什么都不做。
+    ///
+    /// **文件存在但解不出来时，先把它改名保住，再让调用方从空的开始。**
+    ///
+    /// 早先这里是 `try?` 一路吞到底：解码失败 → 内存里是空的 → 下一次写入
+    /// 把用户攒了几周的清单整个覆盖掉，全程无声无息。真丢过一份 13 条的。
+    ///
+    /// 改名到 `.broken-<时间戳>` 之后，最坏情况也只是"这次读不出来"，
+    /// 数据还在盘上能捞回来。**丢数据和读不出来是两个量级的事故。**
     private func reload(_ projectPath: String) {
         guard let url = fileURL(for: projectPath),
-              let data = try? Data(contentsOf: url),
-              let ledger = try? JSONDecoder().decode(AcceptanceLedger.self, from: data)
+              let data = try? Data(contentsOf: url)
         else { return }
-        ledgers[projectPath] = ledger
+
+        if let ledger = try? JSONDecoder().decode(AcceptanceLedger.self, from: data) {
+            ledgers[projectPath] = ledger
+            return
+        }
+
+        let rescued = url.deletingPathExtension()
+            .appendingPathExtension("broken-\(Int(Date().timeIntervalSince1970))")
+        try? FileManager.default.moveItem(at: url, to: rescued)
+        HubLog.app.error("""
+        验收清单解不出来，已保留为 \(rescued.lastPathComponent, privacy: .public)
+        """)
     }
 
     private func persist(_ ledger: AcceptanceLedger) {
@@ -433,9 +451,17 @@ public final class AcceptanceStore {
             at: directory, includingPropertiesForKeys: nil
         )) ?? []
         for file in files where file.pathExtension == "json" {
-            guard let data = try? Data(contentsOf: file),
-                  let ledger = try? JSONDecoder().decode(AcceptanceLedger.self, from: data)
-            else { continue }
+            guard let data = try? Data(contentsOf: file) else { continue }
+            guard let ledger = try? JSONDecoder().decode(AcceptanceLedger.self, from: data) else {
+                // 同 reload：解不出来的先保住，别等下一次写入把它盖掉。
+                let rescued = file.deletingPathExtension()
+                    .appendingPathExtension("broken-\(Int(Date().timeIntervalSince1970))")
+                try? FileManager.default.moveItem(at: file, to: rescued)
+                HubLog.app.error("""
+                启动时有清单解不出来，已保留为 \(rescued.lastPathComponent, privacy: .public)
+                """)
+                continue
+            }
             ledgers[ledger.projectPath] = ledger
         }
     }

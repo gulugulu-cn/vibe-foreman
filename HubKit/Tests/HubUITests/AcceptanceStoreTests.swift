@@ -1,4 +1,5 @@
 import HubCore
+import HubProjects
 import XCTest
 @testable import HubUI
 
@@ -344,6 +345,80 @@ final class AcceptanceStoreTests: XCTestCase {
         XCTAssertTrue(texts.contains("外面加的"), "外部改动被盖掉了：\(texts)")
         XCTAssertTrue(texts.contains("app 加的"))
         XCTAssertTrue(texts.contains("app 后来又加的"))
+    }
+
+    /// **老版本写的清单（缺新字段）必须能读出来。**
+    ///
+    /// 这条来自一次真实的数据丢失：给 `AcceptanceLedger` 加了非可选的
+    /// `authorizedCommands` 之后，所有已存在的文件当场解码失败 ——
+    /// 而读取是 `try?` 静默吞错误的，于是下一次写入从空清单开始，
+    /// 把一份 13 条的清单整个覆盖掉，全程无声无息。
+    ///
+    /// 清单是长期累积的数据，向后兼容不是可选项。
+    /// 以后再加字段，这条测试会先红。
+    func testReadsLedgersWrittenByOlderVersions() throws {
+        let url = tempDir.appendingPathComponent(
+            UsageStats.encodeDirectoryName(for: project) + ".json"
+        )
+        // 一份"老版本"的清单：没有 authorizedCommands，条目里也没有
+        // status / evidence / createdAt 这些后来才加的字段。
+        let legacy = """
+        {"projectPath":"\(project)","rawPrompts":[],"updatedAt":800000000,
+         "items":[{"id":"i1","text":"老数据要还在","origin":"userPrompt"}]}
+        """
+        try legacy.data(using: .utf8)!.write(to: url)
+
+        let store = AcceptanceStore(directory: tempDir)
+
+        XCTAssertEqual(store.ledger(for: project).items.first?.text, "老数据要还在")
+        XCTAssertEqual(store.ledger(for: project).items.first?.status, .open, "缺失的字段要有默认值")
+        XCTAssertEqual(store.ledger(for: project).authorizedCommands, [])
+    }
+
+    /// **一条要点坏了，不能连累同一份清单里其余的。**
+    ///
+    /// 直接 `decode([AcceptanceItem].self)` 时一条坏的会让整个数组抛错，
+    /// 于是整份清单报废 —— 一个项目几十条要点全读不出来。
+    /// 同 `TaskStateReader` 的处理：边跑边写的数据，撞上半条是正常情况。
+    func testOneBrokenItemDoesNotKillTheRest() throws {
+        let url = tempDir.appendingPathComponent(
+            UsageStats.encodeDirectoryName(for: project) + ".json"
+        )
+        // 中间那条缺 text（必填），且 origin 是个没见过的值。
+        let mixed = """
+        {"projectPath":"\(project)","items":[
+          {"id":"a","text":"好的第一条","origin":"userPrompt"},
+          {"id":"b","origin":"来自未来的版本"},
+          {"id":"c","text":"好的第三条","origin":"manual"}
+        ]}
+        """
+        try mixed.data(using: .utf8)!.write(to: url)
+
+        let store = AcceptanceStore(directory: tempDir)
+
+        XCTAssertEqual(
+            store.ledger(for: project).items.map(\.text), ["好的第一条", "好的第三条"],
+            "坏的那条跳过就行，不能连累另外两条"
+        )
+    }
+
+    /// **解不出来的文件绝不能被静默覆盖。**
+    ///
+    /// 丢数据和读不出来是两个量级的事故。读不出来还能捞回来，
+    /// 被覆盖掉就真没了。
+    func testUndecodableLedgerIsPreservedNotOverwritten() throws {
+        let url = tempDir.appendingPathComponent(
+            UsageStats.encodeDirectoryName(for: project) + ".json"
+        )
+        try #"{"projectPath":"x","items":[{"broken"#.data(using: .utf8)!.write(to: url)
+
+        let store = AcceptanceStore(directory: tempDir)
+        store.add(pendingItem("新的一条"), to: project)
+
+        let rescued = try FileManager.default
+            .contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.contains("broken") }
+        XCTAssertEqual(rescued.count, 1, "解不出来的原文件必须被保住，而不是被盖掉")
     }
 
     /// 单个文件坏掉不能让整个功能失效 —— 清单是边跑边写的，

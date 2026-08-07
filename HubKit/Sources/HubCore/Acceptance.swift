@@ -138,6 +138,25 @@ public struct AcceptanceItem: Codable, Sendable, Identifiable, Equatable {
         self.baselineCommit = baselineCommit
     }
 
+    /// 手写解码，理由同 `AcceptanceLedger.init(from:)`：加字段不能让老数据全废。
+    ///
+    /// 只有 `id` / `text` / `origin` 是必须的 —— 少了它们这条要点就没有意义了。
+    /// 其余一律给默认值。
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        text = try container.decode(String.self, forKey: .text)
+        origin = try container.decode(Origin.self, forKey: .origin)
+        acceptance = try container.decodeIfPresent(String.self, forKey: .acceptance)
+        status = try container.decodeIfPresent(Status.self, forKey: .status) ?? .open
+        evidence = try container.decodeIfPresent([Evidence].self, forKey: .evidence) ?? []
+        note = try container.decodeIfPresent(String.self, forKey: .note)
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        sourceSessionId = try container.decodeIfPresent(String.self, forKey: .sourceSessionId)
+        baselineCommit = try container.decodeIfPresent(String.self, forKey: .baselineCommit)
+    }
+
     /// 用户终裁过的项。机器结论一律盖不掉 —— 见 `AcceptanceStore.applyAudit`。
     public var isSettledByUser: Bool { status == .accepted || status == .dropped }
 
@@ -162,6 +181,33 @@ public struct AcceptanceItem: Codable, Sendable, Identifiable, Equatable {
 ///
 /// `UserPromptSubmit` 一到就零成本落这里，**不调模型**。拆解是异步消费这个缓冲的，
 /// 因为拆解要花好几秒，而那个 hook 必须立刻返回。
+/// 逐条解码的要点数组：坏的那条跳过，其余照常。
+///
+/// Swift 没有内置的"容错数组解码"，只能自己包一层。
+private struct LossyItems: Decodable {
+    let values: [AcceptanceItem]
+
+    init(from decoder: Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var collected: [AcceptanceItem] = []
+        while !container.isAtEnd {
+            // 解不出来时也必须**消费掉**这一个元素，否则 isAtEnd 永远不为真 ——
+            // 死循环。用一个空的占位类型把游标推过去。
+            if let item = try? container.decode(AcceptanceItem.self) {
+                collected.append(item)
+            } else {
+                _ = try? container.decode(Skip.self)
+            }
+        }
+        values = collected
+    }
+
+    /// 什么都不读，只为了让 unkeyedContainer 的游标前进一格。
+    private struct Skip: Decodable {
+        init(from decoder: Decoder) throws {}
+    }
+}
+
 public struct RawPrompt: Codable, Sendable, Equatable {
     public let text: String
     public let sessionId: String
@@ -206,6 +252,33 @@ public struct AcceptanceLedger: Codable, Sendable, Equatable {
         self.rawPrompts = rawPrompts
         self.authorizedCommands = authorizedCommands
         self.updatedAt = updatedAt
+    }
+
+    /// **手写解码，每个字段都 decodeIfPresent。**
+    ///
+    /// 合成的 Codable 对非可选字段要求必须存在 —— 给这个结构体加一个新字段，
+    /// 所有已存在的清单文件当场全部解码失败。而 `AcceptanceStore` 的读取是
+    /// `try?` 静默吞错误的，于是下一次写入会从空清单开始，**把用户攒的东西
+    /// 整个覆盖掉**。
+    ///
+    /// 这不是假想：加 `authorizedCommands` 那次就这么丢了一份 13 条的清单，
+    /// 而且当时还有两个项目的文件正等着被同样地清空。
+    ///
+    /// 清单是长期累积的数据，向后兼容不是可选项。以后加字段照着这里写。
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        projectPath = try container.decode(String.self, forKey: .projectPath)
+        // 逐条解，坏的跳过。
+        //
+        // 直接 `decode([AcceptanceItem].self)` 的话，**一条坏了整份清单就报废** ——
+        // 而报废的后果是这个项目的几十条要点全部读不出来。同 TaskStateReader
+        // 的处理：清单是边跑边写的，撞上半条数据是正常情况，不是异常。
+        items = try container.decodeIfPresent(LossyItems.self, forKey: .items)?.values ?? []
+        rawPrompts = try container.decodeIfPresent([RawPrompt].self, forKey: .rawPrompts) ?? []
+        authorizedCommands = try container.decodeIfPresent(
+            [String].self, forKey: .authorizedCommands
+        ) ?? []
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
     }
 
     public var isEmpty: Bool { items.isEmpty && rawPrompts.isEmpty }
