@@ -71,14 +71,45 @@ except Exception:
 PY
 )
 
+  # 屏幕上有没有转圈计时（"✻ Boondoggling… (17s · ↓ 201 tokens)"）。
+  #
+  # 这一条是**必要的补充**，不是冗余：状态文件里的 shell 表示"挂着一个后台
+  # shell"，和 Claude 自己在不在思考无关 —— 实测它空在提示符上等输入时，
+  # 状态照样是 shell。只信状态文件的话这种停顿永远催不到。
+  spinning=0
+  tmux capture-pane -t "$TARGET" -p -S -12 2>/dev/null \
+    | grep -qE '\([0-9]+(m [0-9]+)?s · ' && spinning=1
+
+  # 输入框里有没有没发完的字。
+  #
+  # **有就绝对不能发。** send-keys 是往当前输入位置敲字，用户正在打字时
+  # 会直接拼到他那句后面 —— 实测发生过，把用户的话和追问接成了一句。
+  # 轻则语义变了，重则改变他本来要说的意思。
+  typing=0
+  draft=$(tmux capture-pane -t "$TARGET" -p -S -12 2>/dev/null \
+    | grep '^❯' | tail -1 | sed 's/^❯[[:space:]]*//')
+  [ -n "$(echo "$draft" | tr -d '[:space:]')" ] && typing=1
+
   now=$(date +%s)
+  if [ "$spinning" = 1 ]; then
+    [ "$streak" -gt 0 ] && log "屏幕在转圈，计数清零"
+    streak=0
+    sleep "$INTERVAL"
+    continue
+  fi
+  if [ "$typing" = 1 ]; then
+    log "输入框里有你没发完的字，这轮不打扰"
+    sleep "$INTERVAL"
+    continue
+  fi
+
   case "$state" in
-    busy|shell)
-      # 在干活。streak 清零 —— 中途喘口气不算停。
-      [ "$streak" -gt 0 ] && log "又开始干活了（$state），计数清零"
+    busy)
+      # 真的在思考。streak 清零 —— 中途喘口气不算停。
+      [ "$streak" -gt 0 ] && log "又开始干活了，计数清零"
       streak=0
       ;;
-    idle|waiting)
+    idle|waiting|shell)
       streak=$((streak + 1))
       if [ "$streak" -ge "$NEED_STREAK" ] && [ $((now - last_nudge)) -ge "$COOLDOWN" ]; then
         message="${PROBES[$probe_index]}"
