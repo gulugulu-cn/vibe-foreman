@@ -83,7 +83,14 @@ public struct NotchGeometry: Equatable, Sendable {
         followsCursor ? (screenUnderCursor() ?? preferredScreen()) : preferredScreen()
     }
 
-    public static func screenUnderCursor() -> NSScreen? {
+    /// **刻意是 private。** 想拿屏幕请走 `IslandPlacementStore.screen()`。
+    ///
+    /// 它以前是 public，于是控制器里的 `followCursorAcrossScreens()` 直接调了它，
+    /// 绕过「固定在刘海屏」这个设置 —— 用户在设置里关掉跟随，岛照样跟着光标跑。
+    /// 加设置那次没发现，因为搜的是 `activeScreen()` 的调用点，名字对不上。
+    ///
+    /// 收成 private 之后，这条绕行路在编译期就不存在了。
+    private static func screenUnderCursor() -> NSScreen? {
         let point = NSEvent.mouseLocation
         return NSScreen.screens.first { $0.frame.contains(point) } ?? NSScreen.main
     }

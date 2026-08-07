@@ -75,6 +75,32 @@ final class IslandPlacementTests: XCTestCase {
         XCTAssertEqual(calls, 0, "加载不是用户操作，不该触发重新定位")
     }
 
+    /// 关掉跟随时，选屏必须和「刘海屏」完全一致 —— 不是「通常一致」。
+    ///
+    /// 这条防的是一个真实漏过的 bug：加设置那次只改了三处调用 `activeScreen()`
+    /// 的地方，而控制器里还有个 `followCursorAcrossScreens()` 直接调
+    /// `screenUnderCursor()`，名字对不上没被搜到。用户在界面上关掉跟随，
+    /// 岛照样跟着光标跑。
+    ///
+    /// **这条测试的检出能力取决于跑测试时光标在哪。** 只有光标不在刘海屏上时，
+    /// 「忽略 followsCursor」这种改动才会让两边返回不同的屏。单屏机器上它永远绿。
+    ///
+    /// 所以别把它当成这个 bug 的护栏 —— 真正的护栏是 `screenUnderCursor()` 已经
+    /// 收成 private，绕过设置去取屏在**编译期**就不成立。这条只是在语义层面
+    /// 再钉一次「关掉跟随 = 刘海屏」，聊胜于无，但不该被当作充分保证。
+    func testNotFollowingMeansExactlyTheNotchScreen() {
+        XCTAssertIdentical(
+            NotchGeometry.screen(followsCursor: false),
+            NotchGeometry.preferredScreen(),
+            "关掉跟随时必须落在刘海屏，不能是别的屏"
+        )
+        XCTAssertIdentical(
+            IslandPlacementStore(url: nil).screen(),
+            NotchGeometry.preferredScreen(),
+            "默认（不跟随）走的必须是同一条路"
+        )
+    }
+
     func testCorruptFileFallsBackToTheSafeDefault() {
         let url = tempURL()
         defer { try? FileManager.default.removeItem(at: url) }

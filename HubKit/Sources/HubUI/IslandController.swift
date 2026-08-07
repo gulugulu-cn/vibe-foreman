@@ -423,6 +423,16 @@ public final class IslandController {
     /// 东西从他手底下挪走 —— 尤其应答态，按钮位置一变，本来要点"取消"的
     /// 那一下可能落到"确认发送"上。这条不能省。
     private func followCursorAcrossScreens(force: Bool = false) {
+        // 设置说不跟随就一步都不动。
+        //
+        // 这个 guard 曾经漏掉过：加「固定在刘海屏」这个设置时只改了 show() /
+        // realign() / relocate() 三处，因为 grep 的是 activeScreen() 的调用点，
+        // 而这里调的是 screenUnderCursor()，名字对不上就没被找到。设置界面上
+        // 关掉了，岛照样跟着光标跑。
+        //
+        // 所以 screenUnderCursor() 现在是 NotchGeometry 私有的 —— 想拿屏幕只能
+        // 走 placement.screen()，编译期堵死这条绕行路。
+        guard placement.followsCursor else { return }
         guard force || (model.state == .rest && pinnedState == nil) else { return }
 
         if !force {
@@ -432,7 +442,7 @@ public final class IslandController {
             lastScreenCheck = now
         }
 
-        guard let panel, let screen = NotchGeometry.screenUnderCursor() else { return }
+        guard let panel, let screen = placement.screen() else { return }
         let geo = NotchGeometry(screen: screen)
         guard geo != geometry else { return }
 
