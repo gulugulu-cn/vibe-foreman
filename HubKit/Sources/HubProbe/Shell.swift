@@ -20,15 +20,22 @@ public enum Shell {
     /// - Parameter environment: 在继承的环境之上追加/覆盖的变量。
     ///   `StallJudge` 用它注入 `HUB_JUDGE=1` 来封死 hook 回环。
     @discardableResult
+    /// - Parameter currentDirectory: 子进程的工作目录。
+    ///   验收命令（`swift test` / `npm run build`）必须在项目目录里跑，
+    ///   否则找不到 Package.swift / package.json。
     public static func run(
         _ executable: String,
         _ arguments: [String],
         timeout: TimeInterval = 5,
-        environment: [String: String] = [:]
+        environment: [String: String] = [:],
+        currentDirectory: String? = nil
     ) -> Result {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        if let currentDirectory {
+            process.currentDirectoryURL = URL(fileURLWithPath: currentDirectory)
+        }
         if !environment.isEmpty {
             process.environment = ProcessInfo.processInfo.environment
                 .merging(environment) { _, new in new }

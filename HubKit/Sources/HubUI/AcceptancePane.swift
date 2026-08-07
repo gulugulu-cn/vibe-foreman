@@ -22,7 +22,13 @@ struct AcceptancePane: View {
     let acceptance: AcceptanceStore
     let projects: ProjectStore
     let store: SessionStore
+    let settings: VerifierSettings
+    let verifier: AcceptanceVerifier
     @Binding var selection: String?
+
+    /// 正在跑验证的那一条。同时只允许跑一条 —— 并发跑 `swift build`
+    /// 会互相抢构建目录锁，结果全是假失败。
+    @State private var running: String?
 
     @State private var expanded: Set<String> = []
     @State private var draft = ""
@@ -420,6 +426,7 @@ struct AcceptancePane: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
+                verifyControls(item, acceptance)
             }
             if let note = item.note {
                 Text(note)
@@ -463,6 +470,88 @@ struct AcceptancePane: View {
             .padding(.top, 2)
         }
         .padding(.leading, 15)
+    }
+
+    // MARK: - 实际功能证明（Hub 自己跑）
+
+    /// 验收条件下面那一行控件。
+    ///
+    /// 三道闸的状态在这里全都要**说出来**，不能只显示一个能点的按钮：
+    /// 用户得知道这条为什么能跑 / 为什么不能跑。一个默默不工作的按钮
+    /// 比没有按钮更糟。
+    @ViewBuilder
+    private func verifyControls(_ item: AcceptanceItem, _ acceptance: String) -> some View {
+        let check = AcceptanceVerifier.classify(acceptance)
+        HStack(spacing: 8) {
+            switch check {
+            case .notACommand:
+                Text("这条只能人工确认")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+
+            case .rejected(let reason):
+                Label(reason, systemImage: "hand.raised.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(IslandTheme.danger)
+
+            case .allowed(let argv):
+                let command = argv.joined(separator: " ")
+                if !settings.enabled {
+                    Text("总开关关着 —— 去设置里打开「自动跑验收命令」")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                } else if acceptanceStoreAuthorized(command) {
+                    Button(running == item.id ? "跑着…" : "现在验证") {
+                        runVerification(item, command: command)
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 11, weight: .medium))
+                    .disabled(running != nil)
+                    Button("撤销授权") { revoke(command) }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                } else {
+                    // 命令原文原样显示 —— 授权的前提是看得见到底要跑什么。
+                    Button("允许执行 `\(command)`") { authorize(command) }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 11, weight: .medium))
+                }
+            }
+            Spacer()
+        }
+    }
+
+    private func acceptanceStoreAuthorized(_ command: String) -> Bool {
+        guard let path = currentPath else { return false }
+        return acceptance.isAuthorized(command, in: path)
+    }
+
+    private func authorize(_ command: String) {
+        guard let path = currentPath else { return }
+        acceptance.authorize(command, in: path)
+    }
+
+    private func revoke(_ command: String) {
+        guard let path = currentPath else { return }
+        acceptance.revoke(command, in: path)
+    }
+
+    private func runVerification(_ item: AcceptanceItem, command: String) {
+        guard let path = currentPath else { return }
+        running = item.id
+        let verifier = self.verifier
+        let authorized = Set(acceptance.ledger(for: path).authorizedCommands)
+        Task {
+            let outcome = await verifier.verify(
+                acceptance: item.acceptance, cwd: path, authorized: authorized
+            )
+            running = nil
+            guard case .ran(let evidence) = outcome else { return }
+            acceptance.recordVerification(evidence, forID: item.id, in: path)
+            // 展开着才看得到结果。
+            expanded.insert(item.id)
+        }
     }
 
     // MARK: - 手动加一条

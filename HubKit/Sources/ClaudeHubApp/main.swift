@@ -27,6 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let notifications = HubNotificationCenter()
     private let placement = IslandPlacementStore()
     private let acceptance = AcceptanceStore()
+    private let verifierSettings = VerifierSettings()
+    /// 唯一会执行命令的组件。默认关着，由 `verifierSettings` 驱动。
+    private let verifier = AcceptanceVerifier()
 
     private lazy var island = IslandController(
         store: store, approvals: approvals, prompts: prompts, projects: projects,
@@ -50,6 +53,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 必须在任何一次读取之前把合成数据写到盘上。
         if DemoFixtures.isEnabled { DemoFixtures.materialize() }
+
+        // 总开关 → verifier actor。
+        // 不接的话用户在设置里打开了开关，verifier 那边还是关的 —— 一个默默
+        // 不生效的开关比没有开关更糟。启动时也要同步一次，不能只等变化。
+        verifierSettings.onChange = { [weak self] enabled in
+            guard let self else { return }
+            Task { await self.verifier.update(configuration: .init(enabled: enabled)) }
+        }
+        let verificationEnabled = verifierSettings.enabled
+        Task { await verifier.update(configuration: .init(enabled: verificationEnabled)) }
 
         projects.load()
         projects.startGitPolling()
@@ -258,6 +271,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             approvals: approvals,
             placement: placement,
             acceptance: acceptance,
+            verifierSettings: verifierSettings,
+            verifier: verifier,
             channels: hooks.channels,
             onJump: { [weak self] sessionId in
                 self?.store.jump(to: sessionId)

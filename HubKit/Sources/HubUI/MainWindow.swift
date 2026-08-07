@@ -1,6 +1,7 @@
 import AppKit
 import HubCore
 import HubIPC
+import HubProbe
 import HubProjects
 import SwiftUI
 
@@ -42,6 +43,8 @@ public struct MainWindowView: View {
     @Bindable var approvals: ApprovalCoordinator
     @Bindable var placement: IslandPlacementStore
     @Bindable var acceptance: AcceptanceStore
+    @Bindable var verifierSettings: VerifierSettings
+    let verifier: AcceptanceVerifier
     let channels: HookChannelMonitor
     let onJump: (String) -> Void
     let onLaunch: (Project, LaunchMode) -> Void
@@ -60,6 +63,8 @@ public struct MainWindowView: View {
         approvals: ApprovalCoordinator,
         placement: IslandPlacementStore,
         acceptance: AcceptanceStore,
+        verifierSettings: VerifierSettings,
+        verifier: AcceptanceVerifier,
         channels: HookChannelMonitor,
         onJump: @escaping (String) -> Void,
         onLaunch: @escaping (Project, LaunchMode) -> Void
@@ -69,6 +74,8 @@ public struct MainWindowView: View {
         self.approvals = approvals
         self.placement = placement
         self.acceptance = acceptance
+        self.verifierSettings = verifierSettings
+        self.verifier = verifier
         self.channels = channels
         self.onJump = onJump
         self.onLaunch = onLaunch
@@ -104,7 +111,8 @@ public struct MainWindowView: View {
             )
         case .acceptance:
             AcceptancePane(
-                acceptance: acceptance, projects: projects, store: store, selection: $ledgerPath
+                acceptance: acceptance, projects: projects, store: store,
+                settings: verifierSettings, verifier: verifier, selection: $ledgerPath
             )
         case .projects:
             ProjectsPane(projects: projects, store: store, git: git, onLaunch: onLaunch)
@@ -115,7 +123,7 @@ public struct MainWindowView: View {
         case .settings:
             SettingsPane(
                 approvals: approvals, projects: projects, git: git,
-                placement: placement, channels: channels
+                placement: placement, channels: channels, verifierSettings: verifierSettings
             )
         }
     }
@@ -697,8 +705,36 @@ struct SettingsPane: View {
     let git: GitAccountStore
     @Bindable var placement: IslandPlacementStore
     let channels: HookChannelMonitor
+    @Bindable var verifierSettings: VerifierSettings
 
     @State private var hookStatus: String = "检查中…"
+
+    /// 「Hub 自己跑验收命令」的总开关。
+    ///
+    /// 文案上刻意把三道闸都说出来。这是全案唯一会执行命令的功能，
+    /// 用户有权知道边界在哪 —— 只写一句"自动验证"然后让他猜，
+    /// 结果只会是他不敢开，或者开了但不知道自己开了什么。
+    @ViewBuilder
+    private var verifierCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("自动跑验收命令（实际功能证明）", isOn: $verifierSettings.enabled)
+                .font(.system(size: 14, weight: .semibold))
+
+            Text("""
+            关掉时 Claude Hub 一条命令都不会执行。打开后也仍有两道限制：\
+            只放行构建/测试类命令（`swift test`、`npm run`、`bash scripts/*` 等），\
+            含 shell 元字符的一律拒绝；而且**每条命令首次执行前要你在验收页点「允许」**。
+            """)
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+
+            Text("这是 Claude Hub 唯一会在你机器上执行命令的功能。")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(
+                    verifierSettings.enabled ? IslandTheme.waiting : Color.secondary.opacity(0.6)
+                )
+        }
+    }
 
     /// hook 通道健康度。
     ///
@@ -751,6 +787,7 @@ struct SettingsPane: View {
 
             ScrollView {
                 VStack(spacing: 12) {
+                    Card { verifierCard }
                     Card { hookChannels }
                     Card {
                         VStack(alignment: .leading, spacing: 10) {

@@ -220,6 +220,45 @@ final class AcceptanceStoreTests: XCTestCase {
         XCTAssertEqual(store.injectionText(for: project)?.contains("不是你自己列的 todo"), true)
     }
 
+    /// 一次最多摆 6 条，而且**省略了多少必须说出来**。
+    ///
+    /// 实测在一个真实项目上拦了 12 条，带完整验收条件之后糊了满屏 ——
+    /// 要点一多就没人看（Claude 也一样），反而比不拦更容易被忽略。
+    /// 静默截断更糟：会让人以为"就这几条"。
+    func testInjectionTextIsCappedAndSaysHowManyWereOmitted() {
+        let store = AcceptanceStore(directory: nil)
+        for index in 0..<12 {
+            store.add(AcceptanceItem(text: "要点 \(index)", origin: .userPrompt), to: project)
+        }
+
+        let text = store.injectionText(for: project) ?? ""
+        let listed = text.split(separator: "\n").filter { $0.hasPrefix("- [") }.count
+
+        XCTAssertEqual(listed, 6)
+        XCTAssertTrue(text.contains("另有 6 条未列出"), "省略了多少必须说出来")
+    }
+
+    /// 存疑的必须排在注入正文最前面。
+    ///
+    /// 那一档是「自报做完但代码里找不到」—— 最该先说清楚的一类，
+    /// 排在后面会被 6 条的上限挤掉。
+    func testDisputedItemsComeFirstInTheInjection() {
+        let store = AcceptanceStore(directory: nil)
+        for index in 0..<8 {
+            store.add(AcceptanceItem(text: "普通要点 \(index)", origin: .userPrompt), to: project)
+        }
+        let suspicious = AcceptanceItem(text: "这条自报做了但找不到", origin: .userPrompt)
+        store.add(suspicious, to: project)
+        store.setStatus(.disputed, forID: suspicious.id, in: project)
+
+        let text = store.injectionText(for: project) ?? ""
+
+        XCTAssertTrue(
+            text.contains("这条自报做了但找不到"),
+            "存疑项被 6 条上限挤掉了 —— 它恰恰是最该先说的"
+        )
+    }
+
     /// 已经有定论的项不该出现在注入正文里。
     func testInjectionTextOmitsSettledItems() {
         let store = AcceptanceStore(directory: nil)

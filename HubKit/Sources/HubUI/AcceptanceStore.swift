@@ -105,6 +105,35 @@ public final class AcceptanceStore {
     /// 一轮验收结束后清掉，下一轮重新攒。
     public func clearTouchedFiles(sessionId: String) { touched[sessionId] = nil }
 
+    // MARK: - 验收命令的授权
+
+    public func isAuthorized(_ command: String, in projectPath: String) -> Bool {
+        ledger(for: projectPath).authorizedCommands.contains(command)
+    }
+
+    public func authorize(_ command: String, in projectPath: String) {
+        mutate(projectPath) { ledger in
+            guard !ledger.authorizedCommands.contains(command) else { return }
+            ledger.authorizedCommands.append(command)
+        }
+    }
+
+    public func revoke(_ command: String, in projectPath: String) {
+        mutate(projectPath) { $0.authorizedCommands.removeAll { $0 == command } }
+    }
+
+    /// 记下一次真实执行的结果。
+    ///
+    /// 走 `.ran` 这一档，`isProof` 为 true —— 这是 Hub **亲手**跑出来的，
+    /// 和 Claude 的自述不是一回事。
+    public func recordVerification(_ evidence: Evidence, forID id: String, in projectPath: String) {
+        mutate(projectPath) { ledger in
+            guard let index = ledger.items.firstIndex(where: { $0.id == id }) else { return }
+            ledger.items[index].evidence.append(evidence)
+            ledger.items[index].updatedAt = Date()
+        }
+    }
+
     // MARK: - 读
 
     /// 取某个项目的清单。没有就返回一份空的（不落盘，等到真有内容再写）。
@@ -256,9 +285,24 @@ public final class AcceptanceStore {
         let pending = ledger(for: projectPath).items.filter(\.needsAttention)
         guard !pending.isEmpty else { return nil }
 
-        let lines = pending.map { item -> String in
+        // 一次最多摆这么多条。
+        //
+        // 实测在一个真实项目上拦了 12 条，带完整验收条件之后糊了满屏 ——
+        // 要点一多就没人看（Claude 也一样），反而比不拦更容易被忽略。
+        // 存疑的排前面：那一档是「自报做完但代码里找不到」，最该先说清楚。
+        let cap = 6
+        let ordered = pending.sorted { left, right in
+            (left.status == .disputed ? 0 : 1) < (right.status == .disputed ? 0 : 1)
+        }
+        let shown = Array(ordered.prefix(cap))
+
+        var lines = shown.map { item -> String in
             let condition = item.acceptance.map { "（验收条件：\($0)）" } ?? ""
             return "- [\(item.id)] \(item.text)\(condition)"
+        }
+        if ordered.count > cap {
+            // 省略了多少必须说出来。静默截断会让人以为"就这几条"。
+            lines.append("（另有 \(ordered.count - cap) 条未列出，这轮先核对上面这些）")
         }
 
         return """

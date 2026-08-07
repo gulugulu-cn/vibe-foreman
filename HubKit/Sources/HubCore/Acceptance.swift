@@ -184,17 +184,27 @@ public struct AcceptanceLedger: Codable, Sendable, Equatable {
     public var items: [AcceptanceItem]
     /// 还没拆解的用户原话缓冲。
     public var rawPrompts: [RawPrompt]
+    /// 用户点过「允许执行」的命令原文。
+    ///
+    /// 按项目存，因为授权是有语境的：在自己的项目里跑 `swift test` 没问题，
+    /// 不代表在别人 clone 来的仓库里也没问题。
+    ///
+    /// **它只是第三道闸。** 白名单和元字符检查在它之前，手工往这个数组里
+    /// 塞一条危险命令绕不过前两道 —— 有测试守这一点。
+    public var authorizedCommands: [String]
     public var updatedAt: Date
 
     public init(
         projectPath: String,
         items: [AcceptanceItem] = [],
         rawPrompts: [RawPrompt] = [],
+        authorizedCommands: [String] = [],
         updatedAt: Date = Date()
     ) {
         self.projectPath = projectPath
         self.items = items
         self.rawPrompts = rawPrompts
+        self.authorizedCommands = authorizedCommands
         self.updatedAt = updatedAt
     }
 
