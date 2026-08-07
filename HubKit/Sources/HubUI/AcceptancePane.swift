@@ -370,32 +370,76 @@ struct AcceptancePane: View {
         Card {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    Circle()
-                        .fill(Self.color(for: item.status))
-                        .frame(width: 7, height: 7)
+                    // 可点开的那一段。操作按钮放在它外面 —— 套在同一个
+                    // onTapGesture 里的话，点「确认」会顺手把行也展开。
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(Self.color(for: item.status))
+                            .frame(width: 7, height: 7)
 
-                    Text(item.text)
-                        .font(.system(size: 13))
-                        .lineLimit(expanded.contains(item.id) ? nil : 1)
+                        Text(item.text)
+                            .font(.system(size: 13))
+                            .lineLimit(expanded.contains(item.id) ? nil : 1)
 
-                    Spacer(minLength: 6)
+                        Spacer(minLength: 6)
 
-                    Text(item.origin.label)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(.quaternary, in: .capsule)
+                        Text(item.origin.label)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(.quaternary, in: .capsule)
 
-                    proofBadge(item)
+                        proofBadge(item)
+                    }
+                    .contentShape(.rect)
+                    .onTapGesture { toggle(item.id) }
+
+                    quickActions(item)
                 }
-                .contentShape(.rect)
-                .onTapGesture { toggle(item.id) }
 
                 if expanded.contains(item.id) {
                     detail(item)
                 }
             }
         }
+    }
+
+    /// 行内的人工确认。
+    ///
+    /// **必须在行上，不能只藏在展开区里。** 一份清单几十条，逐条展开再确认
+    /// 根本清不动 —— 清不掉的清单会一直堆着，堆到用户不看它，
+    /// 那时候这个功能就等于不存在了。
+    ///
+    /// 人工判定是终裁：勾了之后旁路复核再判什么都盖不掉（`applyAudit` 会跳过）。
+    @ViewBuilder
+    private func quickActions(_ item: AcceptanceItem) -> some View {
+        HStack(spacing: 2) {
+            if item.isSettledByUser {
+                Button {
+                    setStatus(.open, item)
+                } label: {
+                    Image(systemName: "arrow.uturn.backward")
+                }
+                .help("撤销，放回未验收")
+            } else {
+                Button {
+                    setStatus(.accepted, item)
+                } label: {
+                    Image(systemName: "checkmark")
+                }
+                .help("确认做到了（人工判定，机器结论盖不掉）")
+
+                Button {
+                    setStatus(.dropped, item)
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .help("划掉，这条不做了")
+            }
+        }
+        .buttonStyle(.borderless)
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(.secondary)
     }
 
     /// 证据徽章。**三档必须能一眼分开** —— 「仅自述」和「跑过」看起来一样的话，
@@ -451,22 +495,15 @@ struct AcceptancePane: View {
                 }
             }
 
-            HStack(spacing: 12) {
-                if item.status != .accepted {
-                    Button("接受") { setStatus(.accepted, item) }
-                }
-                if item.status != .dropped {
-                    Button("划掉") { setStatus(.dropped, item) }
-                }
-                if item.isSettledByUser {
-                    Button("撤销") { setStatus(.open, item) }
-                }
+            // 确认 / 划掉 已经在行上了（见 quickActions），这里只留删除 ——
+            // 同一个动作在两处出现，用户会以为它们不是一回事。
+            HStack {
                 Spacer()
-                Button("删除") { remove(item) }
+                Button("删除这条") { remove(item) }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(IslandTheme.danger)
             }
-            .buttonStyle(.borderless)
-            .font(.system(size: 11, weight: .medium))
             .padding(.top, 2)
         }
         .padding(.leading, 15)
