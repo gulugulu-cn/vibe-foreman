@@ -65,6 +65,10 @@ public final class SessionWatchdog {
     @ObservationIgnored private var streak: [String: Int] = [:]
     @ObservationIgnored private var lastNudgeAt: [String: Date] = [:]
     @ObservationIgnored private var probeIndex: [String: Int] = [:]
+    /// 上一轮抓到的画面。**画面变了就说明它在动**，哪怕状态是 shell、
+    /// 哪怕转圈行被滚屏顶掉了。慢命令的输出在往外吐时画面一直在变，
+    /// 这是比"有没有转圈符号"可靠得多的判据。
+    @ObservationIgnored private var lastPane: [String: String] = [:]
 
     public init(
         store: SessionStore,
@@ -252,8 +256,21 @@ public final class SessionWatchdog {
             return "抓不到 \(pane) 的画面"
         }
         if let reason = PaneActivity.doNotDisturb(status: session.rawStatus, pane: text) {
+            lastPane[session.sessionId] = text
             streak[session.sessionId] = 0
             return "不打扰：\(reason)"
+        }
+
+        // 画面和上一轮不一样 = 有东西在往外吐 = 它在干活。
+        //
+        // 这条是为「跑得慢的 shell 命令」加的：那种场景下状态可能是 shell、
+        // 转圈行可能被滚屏顶掉，但输出一直在变。只看转圈符号会把它误判成停了，
+        // 然后在它跑到一半时插一句话 —— 用户明确提过要避免这种混乱。
+        let previous = lastPane[session.sessionId]
+        lastPane[session.sessionId] = text
+        if let previous, previous != text {
+            streak[session.sessionId] = 0
+            return "不打扰：画面还在变（多半是命令在跑）"
         }
 
         let count = (streak[session.sessionId] ?? 0) + 1
@@ -273,7 +290,12 @@ public final class SessionWatchdog {
         // 并且**把原问题原样带上**，让用户在历史里一眼看到它问过什么。
         let probe: String
         if let question = PaneActivity.pendingQuestion(pane: text) {
-            probe = "你在问：「\(question.prefix(50))」——自己判断着办，按你认为对的方案继续，不用等我拍板。做完接着往下推。"
+            // 光说"自己看着办"是把球踢回去，它下一轮很可能又来问一次。
+            // **顺带派一件具体的活**：从清单里挑一条还没做的，让它有明确的下一步。
+            let next = generatedProbes(for: projectPath).first
+            let assignment = next.map { "顺带下一件事：\($0.prefix(60))" }
+                ?? "然后接着把手上的活往下推。"
+            probe = "你在问：「\(question.prefix(40))」——自己判断着办，不用等我拍板。\(assignment)"
         } else {
             guard let next = nextProbe(for: projectPath) else { return "追问清单是空的" }
             probe = next
