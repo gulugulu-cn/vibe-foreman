@@ -265,9 +265,21 @@ public final class SessionWatchdog {
             return "停着但在冷却期内"
         }
 
-        guard let probe = nextProbe(for: projectPath) else { return "追问清单是空的" }
-        let index = probeIndex[projectPath] ?? 0
-        probeIndex[projectPath] = index + 1
+        // **先看它刚说了什么。** 它在问一个等你拍板的问题时，照常甩出轮到的
+        // 那条追问会把问题直接埋掉 —— 它在等的决定没人回，用户看到的是
+        // 一句驴唇不对马嘴的话。实机上就这么发生过。
+        //
+        // 这时候不发清单里的问题，而是回应它：把决定权交回去让它自己走，
+        // 并且**把原问题原样带上**，让用户在历史里一眼看到它问过什么。
+        let probe: String
+        if let question = PaneActivity.pendingQuestion(pane: text) {
+            probe = "你在问：「\(question.prefix(50))」——自己判断着办，按你认为对的方案继续，不用等我拍板。做完接着往下推。"
+        } else {
+            guard let next = nextProbe(for: projectPath) else { return "追问清单是空的" }
+            probe = next
+            let index = probeIndex[projectPath] ?? 0
+            probeIndex[projectPath] = index + 1
+        }
 
         streak[session.sessionId] = 0
         lastNudgeAt[session.sessionId] = now

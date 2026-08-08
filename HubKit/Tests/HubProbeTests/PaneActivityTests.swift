@@ -145,4 +145,54 @@ final class PaneActivityTests: XCTestCase {
             PaneActivity.doNotDisturb(status: nil, pane: "✻ Thinking… (2s · ↓ 1 tokens)")
         )
     }
+
+    // MARK: - 它在问问题吗
+
+    /// 实机场景：它问「要我从第 1 步开始吗？」，而盯梢照常甩出轮到的追问，
+    /// 把问题直接埋掉。
+    func testDetectsAQuestionWaitingForTheUser() {
+        let pane = """
+        第 1 步我可以现在就做（改脚本，不需要你决策）。第 2、3 步要占训练机较长时间。
+
+        要我从第 1 步开始吗？
+
+        ❯
+        """
+        XCTAssertEqual(PaneActivity.pendingQuestion(pane: pane), "要我从第 1 步开始吗？")
+    }
+
+    /// **正文中间的反问句不算。**
+    ///
+    /// 误判的代价是：它正常干活时盯梢也去"放行"，等于凭空插一句废话。
+    func testRhetoricalQuestionMidTextIsNotPending() {
+        let pane = """
+        这不就是重复劳动吗？所以我把它改成了增量跑。
+
+        改完了，接着推进下一项。
+
+        ❯
+        """
+        XCTAssertNil(PaneActivity.pendingQuestion(pane: pane))
+    }
+
+    func testNoQuestionWhenItJustReports() {
+        XCTAssertNil(PaneActivity.pendingQuestion(pane: "已经改完并发布。\n❯"))
+    }
+
+    /// 状态栏、分隔线、转圈行都不是正文，不能被当成"最后一句"。
+    func testSkipsChromeLines() {
+        let pane = """
+        要我继续吗？
+        ─────────────────────
+        ❯
+          # dev @ MacBook-Pro in ~/code
+          ⏵⏵ bypass permissions on
+          ⏺ main
+        """
+        XCTAssertEqual(PaneActivity.pendingQuestion(pane: pane), "要我继续吗？")
+    }
+
+    func testEnglishQuestionMark() {
+        XCTAssertNotNil(PaneActivity.pendingQuestion(pane: "Should I proceed?\n❯"))
+    }
 }

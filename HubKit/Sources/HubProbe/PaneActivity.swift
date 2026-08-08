@@ -45,6 +45,41 @@ public enum PaneActivity {
         pattern: #"\([0-9]+(m [0-9]+)?s · "#
     )
 
+
+    /// 它是不是在**问用户**一个问题，等着回答。
+    ///
+    /// ## 为什么这件事必须先判断
+    ///
+    /// 盯梢原来不看会话刚说了什么，轮到哪条就甩哪条。于是它问
+    /// 「要我从第 1 步开始吗？」的时候，收到的是一句
+    /// 「同一件事你重复从头做了几次？」—— **问题被直接埋掉**，
+    /// 它在等的那个决定没人回，而用户看到的是一句驴唇不对马嘴的话。
+    ///
+    /// 判据刻意保守：只认**最后一个非空正文行**以问号结尾。
+    /// 正文中间的反问句（"这不就是重复劳动吗？所以我改成了…"）不算 ——
+    /// 那种误判会让盯梢在它正常干活时也去"放行"。
+    ///
+    /// 同 `StallDetector` 在没有 AI 时用的那条窄启发式，不另发明一套。
+    public static func pendingQuestion(pane: String) -> String? {
+        let lines = pane.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+
+        for line in lines.reversed() {
+            // 跳过输入框、分隔线、状态栏这些不是正文的东西。
+            if line.isEmpty { continue }
+            if line.hasPrefix("❯") || line.hasPrefix("─") || line.hasPrefix("#") { continue }
+            if line.hasPrefix("⏵") || line.hasPrefix("⏺") || line.hasPrefix("◯") { continue }
+            if durationPattern.firstMatch(
+                in: line, range: NSRange(line.startIndex..., in: line)
+            ) != nil { continue }
+
+            // 找到第一条正文行了 —— 只看它。
+            guard line.hasSuffix("？") || line.hasSuffix("?") else { return nil }
+            return String(line.suffix(80))
+        }
+        return nil
+    }
+
     /// 输入框里有没有用户还没发完的字。
     ///
     /// **有就绝对不能发追问。** `tmux send-keys` 是往当前输入位置敲字，
