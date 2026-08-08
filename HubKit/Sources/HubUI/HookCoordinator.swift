@@ -41,7 +41,7 @@ public final class HookCoordinator {
     public var onPromptNeeded: (() -> Void)?
     /// 某个会话收工了。盯梢靠它做到「一停就跟上」——
     /// 轮询要 90 秒才确认，而 Hook 在收工那一刻就知道。
-    public var onSessionStopped: ((String, String) -> Void)?
+    public var onSessionStopped: ((String, String, String?) -> Void)?
 
     /// 闯入防轰炸：记录每个会话上次闯入的时间。
     ///
@@ -211,7 +211,8 @@ public final class HookCoordinator {
         // 收工事件立刻告诉盯梢。**这是「反应力」的关键**：
         // 轮询那条路要 45 秒一轮 × 连续两次确认 = 最少 90 秒才会追问，
         // 而 Hub 在这一刻就已经知道它停了。
-        onSessionStopped?(event.sessionId, path)
+        // 把它刚说的那段话一起带上 —— 规划器要靠它想出针对性的问题。
+        onSessionStopped?(event.sessionId, path, event.lastAssistantMessage)
 
         notifications.post(title: "✅ \(title)", body: body, sessionId: event.sessionId)
 

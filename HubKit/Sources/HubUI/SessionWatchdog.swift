@@ -55,6 +55,11 @@ public final class SessionWatchdog {
     @ObservationIgnored private let store: SessionStore
     @ObservationIgnored private let projects: ProjectStore
     @ObservationIgnored private let acceptance: AcceptanceStore
+    @ObservationIgnored private let planner = ProbePlanner()
+    /// 每个会话已经问过的问题。**按会话**记，用来去重和在界面上展示。
+    @ObservationIgnored private var asked: [String: [String]] = [:]
+    /// 规划出来、还没问的问题（每个会话一个队列）。
+    @ObservationIgnored private var planned: [String: [String]] = [:]
     @ObservationIgnored private let reply = TerminalReply()
     @ObservationIgnored private let url: URL?
     @ObservationIgnored private var timer: Timer?
@@ -139,6 +144,10 @@ public final class SessionWatchdog {
     /// 真正发出去的那一条。**通用和清单生成交替** ——
     /// 只问清单会让人一直在对答案，只问通用又摸不到具体的漏项。
     func nextProbe(for projectPath: String, sessionId: String) -> String? {
+        // 规划出来的优先 —— 它是针对刚才那段话的，比清单贴。
+        if !(planned[sessionId]?.isEmpty ?? true) {
+            return planned[sessionId]?.removeFirst()
+        }
         let generic = probeList(for: projectPath)
         let generated = generatedProbes(for: projectPath)
         let index = probeIndex[sessionId] ?? 0
@@ -174,10 +183,13 @@ public final class SessionWatchdog {
     ///
     /// 现在收工事件直接进来，等一小会儿（给用户留出插话的时间）就判断。
     /// 轮询保留作兜底：Stop hook 没装、或者会话是被别的方式打断的时候还得靠它。
-    public func sessionDidStop(sessionId: String, projectPath: String) {
+    public func sessionDidStop(sessionId: String, projectPath: String, reply: String? = nil) {
         guard watching.contains(projectPath) else { return }
         // 收工那一刻用户很可能正要说话。等一下再判断，也让屏幕稳定下来。
         // 这个延迟远小于轮询的 90 秒，但足够避开"它刚说完你正要回"的窗口。
+        // 先想下一个该问什么（拿它刚说的话去想），想不出来再退回固定清单。
+        if let reply { schedulePlanning(sessionId: sessionId, projectPath: projectPath, reply: reply) }
+
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(12))
             guard let self, let session = self.store.sessions.first(
@@ -185,6 +197,38 @@ public final class SessionWatchdog {
             ) else { return }
             // 走同一条判断：在思考 / 画面在变 / 有草稿，都不打扰。
             _ = self.evaluate(session, projectPath: projectPath, immediate: true)
+        }
+    }
+
+    /// 拿它刚说的那段话，想一个针对性的问题出来。
+    ///
+    /// 固定清单问不出「针对它刚说的这段话」的问题 —— 它说"关键词提取有 bug
+    /// 刚修完需重测"，该追的是"那重测了吗"，而清单里只有通用的"测了几轮"。
+    ///
+    /// 只在它答完一轮实质内容时调（短回复和冷却期内都跳过），其余走清单。
+    private func schedulePlanning(sessionId: String, projectPath: String, reply: String) {
+        let pending = acceptance.ledger(for: projectPath).items
+            .filter(\.needsAttention).map(\.text)
+        let history = asked[sessionId] ?? []
+        let planner = self.planner
+
+        Task.detached(priority: .utility) {
+            guard await planner.shouldPlan(sessionId: sessionId, reply: reply) else { return }
+            guard let plan = await planner.plan(
+                sessionId: sessionId, reply: reply, pending: pending, alreadyAsked: history
+            ) else { return }
+
+            await MainActor.run {
+                // 规划出来的排在固定清单前面 —— 它更贴当下。
+                self.planned[sessionId, default: []].append(plan.probe)
+                // 它自己说漏的新待办直接进验收清单。这些不在用户原话里、
+                // 也不在它的 todo 里，**只有听它说话才能捞到**。
+                guard !plan.newItems.isEmpty else { return }
+                self.acceptance.merge(
+                    plan.newItems.map { AcceptanceItem(text: $0, origin: .inferred) },
+                    into: projectPath
+                )
+            }
         }
     }
 
@@ -336,7 +380,7 @@ public final class SessionWatchdog {
         let generic = probeList(for: projectPath)
         let generated = generatedProbes(for: projectPath)
         let total = generic.count + generated.count
-        let asked = (probeIndex[session.sessionId] ?? 0) + 1
+        let askedCount = (probeIndex[session.sessionId] ?? 0) + 1
 
         let probe: String
         if let question = PaneActivity.pendingQuestion(pane: text) {
@@ -355,6 +399,7 @@ public final class SessionWatchdog {
 
         streak[session.sessionId] = 0
         lastNudgeAt[session.sessionId] = now
+        asked[session.sessionId, default: []].append(probe)
         let name = session.name ?? String(session.sessionId.prefix(8))
         history.insert(
             NudgeRecord(at: now, sessionName: name, probe: probe, projectPath: projectPath),
@@ -370,7 +415,7 @@ public final class SessionWatchdog {
         let outcome = Self.inject(probe, into: pane)
         // 进度计数必须留着：看不出「问到第几条、总共几条」就没法判断它是不是
         // 在原地打转。这一处我先前改格式时删过一次，是回退。
-        return "追问 \(name) 第 \(asked)/\(total) 条：\(probe.prefix(20))… —— \(outcome)"
+        return "追问 \(name) 第 \(askedCount)/\(total) 条：\(probe.prefix(20))… —— \(outcome)"
     }
 
     /// 把追问敲进终端。
