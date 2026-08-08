@@ -68,6 +68,9 @@ public final class SessionWatchdog {
 
     @ObservationIgnored private var streak: [String: Int] = [:]
     @ObservationIgnored private var lastNudgeAt: [String: Date] = [:]
+    /// **按会话计数，不按项目。** 一个项目可以同时开好几个会话，
+    /// 共用一个计数器时它们会各拿到清单的一个片段 —— 每个会话看到的都是
+    /// 跳着问的半截，没有一个能被完整问一遍。
     @ObservationIgnored private var probeIndex: [String: Int] = [:]
     /// 上一轮抓到的画面。**画面变了就说明它在动**，哪怕状态是 shell、
     /// 哪怕转圈行被滚屏顶掉了。慢命令的输出在往外吐时画面一直在变，
@@ -135,10 +138,10 @@ public final class SessionWatchdog {
 
     /// 真正发出去的那一条。**通用和清单生成交替** ——
     /// 只问清单会让人一直在对答案，只问通用又摸不到具体的漏项。
-    func nextProbe(for projectPath: String) -> String? {
+    func nextProbe(for projectPath: String, sessionId: String) -> String? {
         let generic = probeList(for: projectPath)
         let generated = generatedProbes(for: projectPath)
-        let index = probeIndex[projectPath] ?? 0
+        let index = probeIndex[sessionId] ?? 0
 
         // 偶数轮问通用、奇数轮问清单里的具体条目；某一边空了就全走另一边。
         let useGenerated = index % 2 == 1
@@ -158,6 +161,30 @@ public final class SessionWatchdog {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
+        }
+    }
+
+    /// 某个会话刚收工（Stop hook 报上来的）。
+    ///
+    /// ## 为什么要有这条路，而不是只靠轮询
+    ///
+    /// Hub 本来就在 Stop hook 里第一时间知道会话停了。而 45 秒一轮的轮询 +
+    /// 连续两次确认，意味着从它停下到被追问最少要等 90 秒 —— 用户明确提过
+    /// 「反应力」不够：那边停了，这边没马上跟上。
+    ///
+    /// 现在收工事件直接进来，等一小会儿（给用户留出插话的时间）就判断。
+    /// 轮询保留作兜底：Stop hook 没装、或者会话是被别的方式打断的时候还得靠它。
+    public func sessionDidStop(sessionId: String, projectPath: String) {
+        guard watching.contains(projectPath) else { return }
+        // 收工那一刻用户很可能正要说话。等一下再判断，也让屏幕稳定下来。
+        // 这个延迟远小于轮询的 90 秒，但足够避开"它刚说完你正要回"的窗口。
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(12))
+            guard let self, let session = self.store.sessions.first(
+                where: { $0.sessionId == sessionId }
+            ) else { return }
+            // 走同一条判断：在思考 / 画面在变 / 有草稿，都不打扰。
+            _ = self.evaluate(session, projectPath: projectPath, immediate: true)
         }
     }
 
@@ -242,7 +269,9 @@ public final class SessionWatchdog {
     }
 
     @discardableResult
-    private func evaluate(_ session: AgentSession, projectPath: String) -> String {
+    private func evaluate(
+        _ session: AgentSession, projectPath: String, immediate: Bool = false
+    ) -> String {
         // ⚠️ 不能用 `TerminalReply.locate()` —— 它返回的是给人看的**标签**
         //（"tmux · hub:agentx-dev-kit"），不是 tmux 的 pane 目标。
         // 拿它去 `capture-pane -t` 必然失败，而失败是静默的：
@@ -285,9 +314,13 @@ public final class SessionWatchdog {
             return "不打扰：画面还在变（多半是命令在跑）"
         }
 
-        let count = (streak[session.sessionId] ?? 0) + 1
-        streak[session.sessionId] = count
-        guard count >= needStreak else { return "停着，第 \(count)/\(needStreak) 次确认" }
+        // 事件驱动那条路不用反复确认：Stop hook 已经明确告诉我们它收工了，
+        // 再等两轮只是白白多耗 90 秒。轮询那条路仍然要确认 —— 它没有事件佐证。
+        if !immediate {
+            let count = (streak[session.sessionId] ?? 0) + 1
+            streak[session.sessionId] = count
+            guard count >= needStreak else { return "停着，第 \(count)/\(needStreak) 次确认" }
+        }
 
         let now = Date()
         if let last = lastNudgeAt[session.sessionId], now.timeIntervalSince(last) < cooldown {
@@ -303,7 +336,7 @@ public final class SessionWatchdog {
         let generic = probeList(for: projectPath)
         let generated = generatedProbes(for: projectPath)
         let total = generic.count + generated.count
-        let asked = (probeIndex[projectPath] ?? 0) + 1
+        let asked = (probeIndex[session.sessionId] ?? 0) + 1
 
         let probe: String
         if let question = PaneActivity.pendingQuestion(pane: text) {
@@ -314,10 +347,10 @@ public final class SessionWatchdog {
                 ?? "然后接着把手上的活往下推。"
             probe = "你在问：「\(question.prefix(40))」——自己判断着办，不用等我拍板。\(assignment)"
         } else {
-            guard let next = nextProbe(for: projectPath) else { return "追问清单是空的" }
+            guard let next = nextProbe(for: projectPath, sessionId: session.sessionId) else { return "追问清单是空的" }
             probe = next
-            let index = probeIndex[projectPath] ?? 0
-            probeIndex[projectPath] = index + 1
+            let index = probeIndex[session.sessionId] ?? 0
+            probeIndex[session.sessionId] = index + 1
         }
 
         streak[session.sessionId] = 0

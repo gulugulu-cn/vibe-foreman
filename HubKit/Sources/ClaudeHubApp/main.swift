@@ -88,6 +88,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hooks.onPromptNeeded = { [weak self] in
             self?.island.presentPrompt()
         }
+        // 会话一收工，盯梢立刻判断要不要追问 —— 不等 45 秒的轮询。
+        hooks.onSessionStopped = { [weak self] sessionId, projectPath in
+            self?.watchdog.sessionDidStop(sessionId: sessionId, projectPath: projectPath)
+        }
         hooks.start()
         // 清掉发起方已经死了的审批卡，见 ApprovalCoordinator.startOrphanSweep()。
         approvals.startOrphanSweep()
