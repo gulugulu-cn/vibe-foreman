@@ -190,8 +190,12 @@ public final class SessionWatchdog {
         // 抓到空字符串 → 判成"没在干活"或者干脆什么都不做。
         // 实机上盯梢因此整整 83 分钟一次都没催 —— 用户先发现的，不是程序。
         guard let pane = Self.paneTarget(pid: session.pid) else {
+            // 不在 tmux 里 —— VS Code 扩展、直接开的终端都是这样。
+            // **这不是故障**：盯梢靠 tmux 注入，够不着的会话跳过就是了。
+            // 早先这里写的是"找不到 pane"，读起来像出错，
+            // 于是外面的监听把一个完全正常的情况报成了告警。
             streak[session.sessionId] = 0
-            return "找不到 \(session.pid) 对应的 tmux pane"
+            return "不在 tmux 里，跳过"
         }
 
         let text = Self.capture(pane: pane)
@@ -232,10 +236,41 @@ public final class SessionWatchdog {
         // 我自己就因为读了这个没更新的文件，误判成"一次都没催"。
         persist()
 
-        Task { [reply] in
-            _ = await reply.send(text: probe, to: session.sessionId)
-        }
-        return "刚追问了 \(name) 第 \(index + 1)/\(list.count) 条"
+        let outcome = Self.inject(probe, into: pane)
+        return "追问 \(name) 第 \(index + 1)/\(list.count) 条 —— \(outcome)"
+    }
+
+    /// 把追问敲进终端。
+    ///
+    /// ## 为什么不用 `TerminalReply.send`
+    ///
+    /// 它里面有 `guard !session.status.isWorking`，而 `isWorking` 包含 `shell`。
+    /// 那个判断对它本来的用途（答终端弹出的权限对话框）是对的 —— 会话在忙时
+    /// 往输入框敲字会串进别的地方。
+    ///
+    /// 但对盯梢来说 **`shell` 恰恰是最该催的状态**（挂着后台 shell、人却停在
+    /// 提示符上）。用它的话每次都会被静默挡掉，返回 `.sessionBecameBusy`，
+    /// 而我原来把返回值扔了（`_ = await ...`），于是历史里记着"追问了"、
+    /// 终端里一个字都没有。实机撞到过。
+    ///
+    /// ## 分两步发
+    ///
+    /// 先文字、停一下、再回车。合在一起时终端偶尔会把回车吃进上一段输入里，
+    /// 消息卡在输入框发不出去 —— 看起来催过了，其实一个字没送。
+    static func inject(_ text: String, into pane: String) -> String {
+        guard let tmux = tmuxPath else { return "找不到 tmux" }
+        // 换行会被当成"再敲一次回车"，凭空多发一条输入；控制字符能改终端模式。
+        // 追问清单是用户自己编辑的，这两条必须挡住。
+        guard !text.contains(where: \.isNewline),
+              !text.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+        else { return "追问里有换行或控制字符，拒发" }
+
+        let typed = Shell.run(tmux, ["send-keys", "-t", pane, "-l", text], timeout: 5)
+        guard typed.succeeded else { return "敲字失败：\(typed.stderr)" }
+        Thread.sleep(forTimeInterval: 0.5)
+        let entered = Shell.run(tmux, ["send-keys", "-t", pane, "Enter"], timeout: 5)
+        guard entered.succeeded else { return "回车失败：\(entered.stderr)" }
+        return "已送达"
     }
 
     /// 抓终端画面。只要最后 14 行 —— 转圈行和输入框都在底部，
