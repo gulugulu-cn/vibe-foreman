@@ -10,11 +10,15 @@ public struct NudgeRecord: Codable, Sendable, Equatable {
     public let at: Date
     public let sessionName: String
     public let probe: String
+    /// 属于哪个项目。**没有它就没法按项目过滤** —— 界面上会在 A 项目的页面
+    /// 显示发给 B 项目的追问，用户以为盯梢串了。实机上被看出来过。
+    public let projectPath: String?
 
-    public init(at: Date, sessionName: String, probe: String) {
+    public init(at: Date, sessionName: String, probe: String, projectPath: String? = nil) {
         self.at = at
         self.sessionName = sessionName
         self.probe = probe
+        self.projectPath = projectPath
     }
 }
 
@@ -195,6 +199,11 @@ public final class SessionWatchdog {
         persist()
     }
 
+    /// 某个项目最近一次追问。界面上按项目显示，别把别的项目的混进来。
+    public func lastNudge(for projectPath: String) -> NudgeRecord? {
+        history.first { $0.projectPath == projectPath }
+    }
+
     /// 上一次检查的时刻和结果。界面上直接显示 —— 用户要能自己判断它到底活着没有。
     public private(set) var lastTick: Date?
     public private(set) var lastTickDetail: String = "还没跑过"
@@ -314,7 +323,10 @@ public final class SessionWatchdog {
         streak[session.sessionId] = 0
         lastNudgeAt[session.sessionId] = now
         let name = session.name ?? String(session.sessionId.prefix(8))
-        history.insert(NudgeRecord(at: now, sessionName: name, probe: probe), at: 0)
+        history.insert(
+            NudgeRecord(at: now, sessionName: name, probe: probe, projectPath: projectPath),
+            at: 0
+        )
         // 只留最近这些。历史是给人看"它到底说过什么"的，不是审计日志。
         if history.count > 50 { history.removeLast(history.count - 50) }
         // **必须落盘。** 不落的话界面上和文件里都看不到它说过话 ——
@@ -404,6 +416,23 @@ public final class SessionWatchdog {
         var lastTickDetail: String?
     }
 
+    /// 把盘上比内存新的部分捡回来。只捡配置（盯谁、问什么），
+    /// 不捡心跳和历史 —— 那两样是 app 自己产生的，内存里的才是最新。
+    private func mergeFromDisk() {
+        guard let url,
+              let data = try? Data(contentsOf: url),
+              let payload = try? JSONDecoder().decode(Payload.self, from: data)
+        else { return }
+        // **只捡清单，不捡 watching。**
+        //
+        // watching 是界面上那个开关，内存里的才代表用户最新的意图。
+        // 合并的话「关掉盯梢」会被盘上的旧值又打开 —— 开关看起来失灵，
+        // 而且是静默的。测试 testCanStopWatching 抓到的就是这个。
+        for (path, list) in payload.probes where (probes[path]?.count ?? 0) < list.count {
+            probes[path] = list
+        }
+    }
+
     private func load() {
         guard let url,
               let data = try? Data(contentsOf: url),
@@ -418,6 +447,13 @@ public final class SessionWatchdog {
 
     private func persist() {
         guard let url else { return }
+        // 先重读一次盘。
+        //
+        // 追问清单是给人改的 —— 手工编辑 JSON 补几条完全合理。app 内存里的
+        // 旧状态直接写下去会把手改的整个盖掉，无声无息。
+        // **这个 bug 我今天早上在 AcceptanceStore 上修过一次**，
+        // 当时没想到这里有一模一样的一份；实机上 47 条被盖回 25 条。
+        mergeFromDisk()
         let payload = Payload(
             watching: watching.sorted(), probes: probes, history: Array(history.prefix(50)),
             lastTick: lastTick, lastTickDetail: lastTickDetail

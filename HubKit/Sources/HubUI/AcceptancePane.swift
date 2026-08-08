@@ -238,7 +238,7 @@ struct AcceptancePane: View {
     private var watchdogBar: some View {
         if let path = currentPath {
             let on = watchdog.isWatching(path)
-            let recent = watchdog.history.first
+            let recent = watchdog.lastNudge(for: path)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Toggle("盯梢：停了就追问", isOn: Binding(
