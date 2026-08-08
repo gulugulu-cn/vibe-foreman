@@ -130,7 +130,32 @@ public final class SessionWatchdog {
             .filter { $0.needsAttention && !$0.likelyMisextracted }
             .sorted { left, _ in left.status == .disputed }
 
-        return items.prefix(12).map { item in
+        // 先挑出「仓库里一点痕迹都没有」的那些，排到最前面。
+        //
+        // 这一档补的是最大的缺口：auditor 只在它自报做完时才跑，
+        // **它压根不提的事情没有任何东西会去查**。三份训练素材发过去两小时
+        // 一个都没接，系统里没有任何机制发现，是用户先问的。
+        let untouched = Set(
+            items.prefix(20).compactMap { item -> String? in
+                RepoTrace.missingTrace(for: item.text, cwd: projectPath) != nil ? item.id : nil
+            }
+        )
+        let ordered = items.sorted { left, right in
+            let l = untouched.contains(left.id) ? 0 : (left.status == .disputed ? 1 : 2)
+            let r = untouched.contains(right.id) ? 0 : (right.status == .disputed ? 1 : 2)
+            return l < r
+        }
+
+        return ordered.prefix(12).map { item in
+            if untouched.contains(item.id) {
+                let text = item.text.count <= 46 ? item.text : String(item.text.prefix(45)) + "…"
+                return "「\(text)」——我去仓库里搜过了，commit 信息、改动文件名、现有文件名三处都找不到任何相关痕迹。这条是漏了、还是判断不该做、还是卡在哪一步？别跳过这个问题。"
+            }
+            return Self.probeText(for: item)
+        }
+    }
+
+    private static func probeText(for item: AcceptanceItem) -> String {
             let text = item.text.count <= 46 ? item.text : String(item.text.prefix(45)) + "…"
             if item.status == .disputed {
                 let why = item.note.map { "（复核说：\($0)）" } ?? ""
@@ -139,7 +164,6 @@ public final class SessionWatchdog {
             let how = item.acceptance.map { "验收条件是：\($0)。" } ?? ""
             return "「\(text)」这条做了吗？\(how)做了给文件路径和行号，没做直接说没做，别绕。"
         }
-    }
 
     /// 真正发出去的那一条。**通用和清单生成交替** ——
     /// 只问清单会让人一直在对答案，只问通用又摸不到具体的漏项。

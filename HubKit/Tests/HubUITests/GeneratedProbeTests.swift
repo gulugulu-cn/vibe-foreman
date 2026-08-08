@@ -130,7 +130,7 @@ final class GeneratedProbeTests: XCTestCase {
         let watchdog = make([AcceptanceItem(text: "具体的那一条", origin: .userPrompt)])
         watchdog.setProbes(["通用问题"], for: project)
 
-        XCTAssertEqual(watchdog.nextProbe(for: project), "通用问题")
+        XCTAssertEqual(watchdog.nextProbe(for: project, sessionId: "s1"), "通用问题")
     }
 
     /// 清单为空时全走通用，不能因此哑掉。
@@ -138,6 +138,6 @@ final class GeneratedProbeTests: XCTestCase {
         let watchdog = make([])
         watchdog.setProbes(["通用问题"], for: project)
 
-        XCTAssertEqual(watchdog.nextProbe(for: project), "通用问题")
+        XCTAssertEqual(watchdog.nextProbe(for: project, sessionId: "s1"), "通用问题")
     }
 }
