@@ -61,6 +61,17 @@ public final class AcceptanceStore {
     @ObservationIgnored
     private var armedSessions: Set<String> = []
 
+    /// 上一次拦下某个会话的时间。
+    ///
+    /// **拦截本身是有成本的**：它每被拦一次就要停下手上的活、逐条答一遍。
+    /// 实测清单涨到 175 条之后，它六分钟里全在答验收、一点活没干 ——
+    /// 验收本来是为了让工作更实，不是替代工作。
+    @ObservationIgnored
+    private var lastInterceptAt: [String: Date] = [:]
+
+    /// 两次拦截的最小间隔。到不了就放行，让它有整块时间干活。
+    private let interceptCooldown: TimeInterval = 900
+
     /// 用户说话了 —— 给这个会话上膛。**唯一的上膛入口。**
     public func arm(sessionId: String) {
         armedSessions.insert(sessionId)
@@ -73,8 +84,21 @@ public final class AcceptanceStore {
     public func disarmAndShouldIntercept(sessionId: String, projectPath: String) -> Bool {
         let wasArmed = armedSessions.remove(sessionId) != nil
         guard wasArmed else { return false }
+
+        // 冷却期内直接放行。**卸膛在前面已经做了**，所以这里 return false
+        // 不会破坏防死循环的结构 —— 只是这一次不拦。
+        let now = Date()
+        if let last = lastInterceptAt[sessionId],
+           now.timeIntervalSince(last) < interceptCooldown {
+            return false
+        }
+
         // 清单里没有待办就别打扰 —— 没启用这功能的项目必须完全无感。
-        return ledger(for: projectPath).items.contains(where: \.needsAttention)
+        guard ledger(for: projectPath).items.contains(where: \.needsAttention) else {
+            return false
+        }
+        lastInterceptAt[sessionId] = now
+        return true
     }
 
     /// 只读地看一眼有没有上膛。给测试和排障用，不改状态。
@@ -350,7 +374,8 @@ public final class AcceptanceStore {
         // 实测在一个真实项目上拦了 12 条，带完整验收条件之后糊了满屏 ——
         // 要点一多就没人看（Claude 也一样），反而比不拦更容易被忽略。
         // 存疑的排前面：那一档是「自报做完但代码里找不到」，最该先说清楚。
-        let cap = 6
+        // 从 6 降到 3：一次问太多它要停很久才能答完，而它本该在干活。
+        let cap = 3
         // 存疑的优先；其余按**最久没问过**的排前面。
         //
         // 不轮换的话每轮问的都是同一批：老实答「没做」的条目保持 .open，

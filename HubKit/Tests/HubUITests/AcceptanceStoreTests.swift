@@ -235,8 +235,8 @@ final class AcceptanceStoreTests: XCTestCase {
         let text = store.injectionText(for: project) ?? ""
         let listed = text.split(separator: "\n").filter { $0.hasPrefix("- [") }.count
 
-        XCTAssertEqual(listed, 6)
-        XCTAssertTrue(text.contains("另有 6 条未列出"), "省略了多少必须说出来")
+        XCTAssertEqual(listed, 3)
+        XCTAssertTrue(text.contains("另有 9 条未列出"), "省略了多少必须说出来")
     }
 
     /// **老实回答「没做」不能被惩罚。**
@@ -259,7 +259,7 @@ final class AcceptanceStoreTests: XCTestCase {
             .filter { second.contains($0.id) }.map(\.id)
 
         XCTAssertEqual(Set(firstIDs).intersection(secondIDs).count, 0, "第二轮该问没问过的那批")
-        XCTAssertEqual(secondIDs.count, 6)
+        XCTAssertEqual(secondIDs.count, 3)
     }
 
     /// 问过 3 次还说没做的，停止再问并标成「疑似误拆」。
