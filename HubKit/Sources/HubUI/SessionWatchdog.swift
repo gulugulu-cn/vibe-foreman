@@ -245,7 +245,10 @@ public final class SessionWatchdog {
             // 早先这里写的是"找不到 pane"，读起来像出错，
             // 于是外面的监听把一个完全正常的情况报成了告警。
             streak[session.sessionId] = 0
-            return "不在 tmux 里，跳过"
+            // pid 必须带上：没有它就没法人工核查到底是哪个进程够不着。
+            // 我先前为了区分「故障」和「正常情况」改措辞时，顺手把 pid 删了 ——
+            // 正是「别为了改一处顺手把好东西改坏」的同一个错。
+            return "pid \(session.pid) 不在 tmux 里，跳过"
         }
 
         let text = Self.capture(pane: pane)
@@ -288,6 +291,11 @@ public final class SessionWatchdog {
         //
         // 这时候不发清单里的问题，而是回应它：把决定权交回去让它自己走，
         // 并且**把原问题原样带上**，让用户在历史里一眼看到它问过什么。
+        let generic = probeList(for: projectPath)
+        let generated = generatedProbes(for: projectPath)
+        let total = generic.count + generated.count
+        let asked = (probeIndex[projectPath] ?? 0) + 1
+
         let probe: String
         if let question = PaneActivity.pendingQuestion(pane: text) {
             // 光说"自己看着办"是把球踢回去，它下一轮很可能又来问一次。
@@ -315,7 +323,9 @@ public final class SessionWatchdog {
         persist()
 
         let outcome = Self.inject(probe, into: pane)
-        return "追问 \(name)：\(probe.prefix(24))… —— \(outcome)"
+        // 进度计数必须留着：看不出「问到第几条、总共几条」就没法判断它是不是
+        // 在原地打转。这一处我先前改格式时删过一次，是回退。
+        return "追问 \(name) 第 \(asked)/\(total) 条：\(probe.prefix(20))… —— \(outcome)"
     }
 
     /// 把追问敲进终端。
