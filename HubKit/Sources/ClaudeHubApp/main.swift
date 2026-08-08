@@ -31,7 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 唯一会执行命令的组件。默认关着，由 `verifierSettings` 驱动。
     private let verifier = AcceptanceVerifier()
     /// 会话观察者：盯着开着的项目，会话停下来就按清单追问。
-    private lazy var watchdog = SessionWatchdog(store: store, projects: projects)
+    private lazy var watchdog = SessionWatchdog(
+        store: store, projects: projects, acceptance: acceptance
+    )
 
     private lazy var island = IslandController(
         store: store, approvals: approvals, prompts: prompts, projects: projects,

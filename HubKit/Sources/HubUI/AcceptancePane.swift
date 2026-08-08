@@ -250,7 +250,10 @@ struct AcceptancePane: View {
                     .font(.system(size: 12, weight: .medium))
 
                     if on {
-                        Text("清单 \(watchdog.probeList(for: path).count) 条 · 轮着问")
+                        // 两个数字分开显示：用户要能看出「通用的」和「从清单
+                        // 当场生成的」是两回事，否则改了上面那个文本框却发现
+                        // 问出来的问题对不上，会以为坏了。
+                        Text("通用 \(watchdog.probeList(for: path).count) 条 + 清单 \(watchdog.generatedProbes(for: path).count) 条 · 交替问")
                             .font(.system(size: 11)).monospacedDigit()
                             .foregroundStyle(.secondary)
                     }

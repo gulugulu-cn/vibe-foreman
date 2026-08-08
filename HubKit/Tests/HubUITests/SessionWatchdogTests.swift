@@ -22,7 +22,12 @@ final class SessionWatchdogTests: XCTestCase {
     }
 
     private func make(url: URL?) -> SessionWatchdog {
-        SessionWatchdog(store: SessionStore(), projects: ProjectStore(yamlURL: nil, pinURL: nil), url: url)
+        SessionWatchdog(
+            store: SessionStore(),
+            projects: ProjectStore(yamlURL: nil, pinURL: nil),
+            acceptance: AcceptanceStore(directory: nil),
+            url: url
+        )
     }
 
     /// **默认必须是关的。**

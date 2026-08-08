@@ -50,6 +50,7 @@ public final class SessionWatchdog {
 
     @ObservationIgnored private let store: SessionStore
     @ObservationIgnored private let projects: ProjectStore
+    @ObservationIgnored private let acceptance: AcceptanceStore
     @ObservationIgnored private let reply = TerminalReply()
     @ObservationIgnored private let url: URL?
     @ObservationIgnored private var timer: Timer?
@@ -68,10 +69,12 @@ public final class SessionWatchdog {
     public init(
         store: SessionStore,
         projects: ProjectStore,
+        acceptance: AcceptanceStore,
         url: URL? = SessionWatchdog.defaultURL
     ) {
         self.store = store
         self.projects = projects
+        self.acceptance = acceptance
         self.url = url
         load()
     }
@@ -90,9 +93,52 @@ public final class SessionWatchdog {
         persist()
     }
 
+    /// 手写的通用追问。界面上可编辑的就是这一份。
     public func probeList(for projectPath: String) -> [String] {
         let custom = probes[projectPath] ?? []
         return custom.isEmpty ? Self.defaultProbes : custom
+    }
+
+    /// 从验收清单**当场生成**的追问。
+    ///
+    /// ## 为什么不能只靠手写清单
+    ///
+    /// 手写的那些是通用问题（"落到哪些文件了"、"有哪些卡点"）。问几轮之后
+    /// 它就摸清套路了，答案会越来越像模板。而清单里明明躺着 18 条待验收、
+    /// 7 条存疑 —— **那些才是该问的具体问题**，而且每一条都问不出模板答案。
+    ///
+    /// 存疑的排最前：那一档是「它自报做完了、但真实 diff 里找不到」，
+    /// 是整个清单里最该当面对质的。
+    public func generatedProbes(for projectPath: String) -> [String] {
+        let items = acceptance.ledger(for: projectPath).items
+            .filter { $0.needsAttention && !$0.likelyMisextracted }
+            .sorted { left, _ in left.status == .disputed }
+
+        return items.prefix(12).map { item in
+            let text = item.text.count <= 46 ? item.text : String(item.text.prefix(45)) + "…"
+            if item.status == .disputed {
+                let why = item.note.map { "（复核说：\($0)）" } ?? ""
+                return "你说做完了「\(text)」，但真实 diff 里找不到对应改动\(why)。具体是哪个文件的哪几行实现的？找不到就直说没做。"
+            }
+            let how = item.acceptance.map { "验收条件是：\($0)。" } ?? ""
+            return "「\(text)」这条做了吗？\(how)做了给文件路径和行号，没做直接说没做，别绕。"
+        }
+    }
+
+    /// 真正发出去的那一条。**通用和清单生成交替** ——
+    /// 只问清单会让人一直在对答案，只问通用又摸不到具体的漏项。
+    func nextProbe(for projectPath: String) -> String? {
+        let generic = probeList(for: projectPath)
+        let generated = generatedProbes(for: projectPath)
+        let index = probeIndex[projectPath] ?? 0
+
+        // 偶数轮问通用、奇数轮问清单里的具体条目；某一边空了就全走另一边。
+        let useGenerated = index % 2 == 1
+        let pool = useGenerated
+            ? (generated.isEmpty ? generic : generated)
+            : (generic.isEmpty ? generated : generic)
+        guard !pool.isEmpty else { return nil }
+        return pool[(index / 2) % pool.count]
     }
 
     public func setProbes(_ list: [String], for projectPath: String) {
@@ -219,11 +265,9 @@ public final class SessionWatchdog {
             return "停着但在冷却期内"
         }
 
-        let list = probeList(for: projectPath)
-        guard !list.isEmpty else { return "追问清单是空的" }
-        let index = (probeIndex[projectPath] ?? 0) % list.count
-        let probe = list[index]
-        probeIndex[projectPath] = (index + 1) % list.count
+        guard let probe = nextProbe(for: projectPath) else { return "追问清单是空的" }
+        let index = probeIndex[projectPath] ?? 0
+        probeIndex[projectPath] = index + 1
 
         streak[session.sessionId] = 0
         lastNudgeAt[session.sessionId] = now
@@ -237,7 +281,7 @@ public final class SessionWatchdog {
         persist()
 
         let outcome = Self.inject(probe, into: pane)
-        return "追问 \(name) 第 \(index + 1)/\(list.count) 条 —— \(outcome)"
+        return "追问 \(name)：\(probe.prefix(24))… —— \(outcome)"
     }
 
     /// 把追问敲进终端。
