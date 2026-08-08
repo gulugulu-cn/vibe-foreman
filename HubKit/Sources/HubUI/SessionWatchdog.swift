@@ -117,40 +117,106 @@ public final class SessionWatchdog {
     func tick() {
         guard !watching.isEmpty else { return }
 
+        var matched = 0
+        // **每个会话都要记一句。** 只留最后一个的结果时，一个残留的死会话
+        // 会把真正在跑的那个整个盖掉 —— 实测第一条心跳就撞上了：
+        // 显示"找不到 53603 对应的 pane"，而 44669 的情况完全看不见。
+        var notes: [String] = []
         for session in store.sessions {
             let path = AcceptanceStore.projectPath(forCWD: session.cwd, projects: projects)
             guard watching.contains(path) else { continue }
-            evaluate(session, projectPath: path)
+            matched += 1
+            let name = session.name ?? String(session.sessionId.prefix(8))
+            notes.append("[\(name)] \(evaluate(session, projectPath: path))")
         }
+        let note = matched == 0
+            ? "没有会话落在被盯的项目里（共 \(store.sessions.count) 个会话）"
+            : notes.joined(separator: " · ")
+
+        // 心跳。**没有它，"盯梢没在工作"和"盯梢工作了但没到该催的时候"
+        // 在外面看起来一模一样** —— 都是没有任何输出。
+        // 我就是因为分不清这两种，让一个死掉的盯梢挂了快 4 小时。
+        //
+        // 写文件而不是打日志：本机实测 `log show` 完全看不到这个 app 的输出
+        // （连启动那条都没有，多半和 ad-hoc 签名有关）。
+        // **一个看不见的仪表比没有仪表更糟** —— 我拿它做过诊断，得出了错误结论。
+        lastTick = Date()
+        lastTickDetail = "\(watching.count) 个项目在盯，本轮命中 \(matched) 个会话；\(note)"
+        persist()
     }
 
-    private func evaluate(_ session: AgentSession, projectPath: String) {
-        guard let pane = reply.locate(sessionId: session.sessionId, session: session) else {
-            // 找不到终端就别猜。往一个定位不到的窗口敲字比不敲危险。
+    /// 上一次检查的时刻和结果。界面上直接显示 —— 用户要能自己判断它到底活着没有。
+    public private(set) var lastTick: Date?
+    public private(set) var lastTickDetail: String = "还没跑过"
+
+    /// 拿到 tmux 里真正的 pane 目标（`%15` 这种）。
+    ///
+    /// pane 的 `pane_pid` 是它直接起的那个进程 —— 可能是 shell，claude 是它的
+    /// 后代。所以从 claude 的 pid 一路往上找父进程，直到撞上某个 pane_pid。
+    static func paneTarget(pid: pid_t) -> String? {
+        guard let tmux = tmuxPath else { return nil }
+        let listing = Shell.run(
+            tmux, ["list-panes", "-a", "-F", "#{pane_id} #{pane_pid}"], timeout: 5
+        ).stdout
+        guard !listing.isEmpty else { return nil }
+
+        var panes: [pid_t: String] = [:]
+        for line in listing.split(separator: "\n") {
+            let parts = line.split(separator: " ")
+            guard parts.count == 2, let panePid = pid_t(parts[1]) else { continue }
+            panes[panePid] = String(parts[0])
+        }
+
+        var current = pid
+        // 往上走几层就够了（claude → shell → pane）。加上界防止父子环。
+        for _ in 0..<8 {
+            if let pane = panes[current] { return pane }
+            guard let parent = Self.parent(of: current), parent > 1 else { return nil }
+            current = parent
+        }
+        return nil
+    }
+
+    private static func parent(of pid: pid_t) -> pid_t? {
+        let out = Shell.run("/bin/ps", ["-o", "ppid=", "-p", "\(pid)"], timeout: 3).stdout
+        return pid_t(out.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    @discardableResult
+    private func evaluate(_ session: AgentSession, projectPath: String) -> String {
+        // ⚠️ 不能用 `TerminalReply.locate()` —— 它返回的是给人看的**标签**
+        //（"tmux · hub:agentx-dev-kit"），不是 tmux 的 pane 目标。
+        // 拿它去 `capture-pane -t` 必然失败，而失败是静默的：
+        // 抓到空字符串 → 判成"没在干活"或者干脆什么都不做。
+        // 实机上盯梢因此整整 83 分钟一次都没催 —— 用户先发现的，不是程序。
+        guard let pane = Self.paneTarget(pid: session.pid) else {
             streak[session.sessionId] = 0
-            return
+            return "找不到 \(session.pid) 对应的 tmux pane"
         }
 
         let text = Self.capture(pane: pane)
-        if let reason = PaneActivity.doNotDisturb(status: session.rawStatus, pane: text) {
-            if (streak[session.sessionId] ?? 0) > 0 {
-                HubLog.app.notice("盯梢：\(session.sessionId.prefix(8), privacy: .public) 又动了（\(reason, privacy: .public)）")
-            }
+        // 抓不到画面时**不做判断**。空字符串会让 isWorking / draft 全部返回
+        // "没有"，于是看起来像"停着可以催" —— 那是拿抓取失败当成了结论。
+        guard !text.isEmpty else {
             streak[session.sessionId] = 0
-            return
+            return "抓不到 \(pane) 的画面"
+        }
+        if let reason = PaneActivity.doNotDisturb(status: session.rawStatus, pane: text) {
+            streak[session.sessionId] = 0
+            return "不打扰：\(reason)"
         }
 
         let count = (streak[session.sessionId] ?? 0) + 1
         streak[session.sessionId] = count
-        guard count >= needStreak else { return }
+        guard count >= needStreak else { return "停着，第 \(count)/\(needStreak) 次确认" }
 
         let now = Date()
         if let last = lastNudgeAt[session.sessionId], now.timeIntervalSince(last) < cooldown {
-            return
+            return "停着但在冷却期内"
         }
 
         let list = probeList(for: projectPath)
-        guard !list.isEmpty else { return }
+        guard !list.isEmpty else { return "追问清单是空的" }
         let index = (probeIndex[projectPath] ?? 0) % list.count
         let probe = list[index]
         probeIndex[projectPath] = (index + 1) % list.count
@@ -161,14 +227,15 @@ public final class SessionWatchdog {
         history.insert(NudgeRecord(at: now, sessionName: name, probe: probe), at: 0)
         // 只留最近这些。历史是给人看"它到底说过什么"的，不是审计日志。
         if history.count > 50 { history.removeLast(history.count - 50) }
+        // **必须落盘。** 不落的话界面上和文件里都看不到它说过话 ——
+        // 而"它到底催没催"正是排障时唯一想知道的事。
+        // 我自己就因为读了这个没更新的文件，误判成"一次都没催"。
+        persist()
 
         Task { [reply] in
             _ = await reply.send(text: probe, to: session.sessionId)
         }
-        HubLog.app.notice("""
-        盯梢：向 \(name, privacy: .public) 追问第 \(index + 1, privacy: .public)/\
-        \(list.count, privacy: .public) 条
-        """)
+        return "刚追问了 \(name) 第 \(index + 1)/\(list.count) 条"
     }
 
     /// 抓终端画面。只要最后 14 行 —— 转圈行和输入框都在底部，
@@ -210,6 +277,8 @@ public final class SessionWatchdog {
         var watching: [String]
         var probes: [String: [String]]
         var history: [NudgeRecord]
+        var lastTick: Date?
+        var lastTickDetail: String?
     }
 
     private func load() {
@@ -220,12 +289,15 @@ public final class SessionWatchdog {
         watching = Set(payload.watching)
         probes = payload.probes
         history = payload.history
+        lastTick = payload.lastTick
+        lastTickDetail = payload.lastTickDetail ?? "还没跑过"
     }
 
     private func persist() {
         guard let url else { return }
         let payload = Payload(
-            watching: watching.sorted(), probes: probes, history: Array(history.prefix(50))
+            watching: watching.sorted(), probes: probes, history: Array(history.prefix(50)),
+            lastTick: lastTick, lastTickDetail: lastTickDetail
         )
         guard let data = try? JSONEncoder().encode(payload) else { return }
         try? FileManager.default.createDirectory(
