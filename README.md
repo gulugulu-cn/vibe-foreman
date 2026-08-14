@@ -1,491 +1,244 @@
 # Claude Hub
 
-Claude Code 本地开发调度中心。用一个 Claude 窗口管理所有项目。
+把 MacBook 的刘海变成本地 AI 编程 agent 的控制中心。
 
-## 功能
+同时跑七八个 Claude Code 会话的时候，最难受的是三件事：**不知道哪个在等你**、
+**知道了也切不过去**、以及**它停下来的那一瞬你正好没在看**。
+Claude Hub 解决的就是这三件事。
 
-- **灵动岛** — MacBook 刘海变成 agent 控制中心，Liquid Glass + 状态驱动的像素小人
-- **实时会话监控** — 每个 Claude 会话的 `busy / waiting / shell / idle` 状态一眼可见
-- **精准跳转** — 点通知或点会话，直接跳到那个会话所在的终端 tab（不是"跳到 iTerm 然后自己找"）
-- **验收清单** — 从你的原话和批准过的计划里拆出要点，跨会话累积；它说做完了，拿真实 git diff 复核
-- **会话观察者（盯梢）** — 它停下来就追问，问的是它不想被问的那些：落到哪个文件了、发布后还在不在
-- **高风险审批** — 不可逆操作（`rm -rf /`、force push 到 main 等）在岛上拦截确认
-- **tmux 多项目管理** — 每个项目一个 tmux 窗口，iTerm2 标签页体验
-- **用量统计** — 按项目查看 token 消耗、会话数、模型分布
-- **项目发现** — 扫描目录自动生成项目清单
-- **浏览器自动化** — Claude in Chrome + DevTools 双引擎协同
+<p align="center">
+  <img src="docs/screenshots/01-hover.png" width="620" alt="鼠标经过刘海，露出每个会话的像素小人">
+</p>
 
-## 新电脑完整安装
+鼠标经过刘海就展开。每个会话一个小人：**敲键盘 = 在干活，举手 = 在等你，
+静止 = 空闲**。需要你处理的那个会被琥珀色光晕框住，名字直接顶在下面 ——
+不用逐个去认颜色。
 
-### 1. 安装前置依赖
+## 下载
 
-```bash
-# Homebrew（如果没有）
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+[**最新版本**](../../releases/latest) · macOS 26+ · Apple Silicon 和 Intel 通用
 
-# 必需
-brew install tmux
-brew install terminal-notifier
-xcode-select --install
+1. 打开 dmg，把 **Claude Hub** 拖进「应用程序」
+2. 双击 **安装 hook.command**
+3. `open -a "Claude Hub"`
 
-# Claude Code CLI（需要 Node.js）
-brew install node
-npm install -g @anthropic-ai/claude-code
-```
+> 应用是自签名未公证的，首次打开需要**右键 → 打开**，
+> 或者 `xattr -dr com.apple.quarantine "/Applications/Claude Hub.app"`。
 
-### 2. iTerm2 tmux 集成（setup.sh 自动配置）
+## 它能做什么
 
-项目使用 `tmux -CC` 模式（iTerm2 专属），让 tmux 窗口显示为**原生标签页**。
+### 一眼看清七个会话在干嘛
 
-`setup.sh` 会自动执行以下配置，**无需手动去 GUI 里勾选**：
+<img src="docs/screenshots/02-expanded-sessions.png" width="560" alt="展开后的会话列表">
 
-```bash
-# tmux 窗口显示为 iTerm2 标签页（而非独立窗口）
-defaults write com.googlecode.iterm2 OpenTmuxWindowsIn -int 2
-# 连接后自动隐藏 tmux 控制会话（避免多余的空白标签）
-defaults write com.googlecode.iterm2 AutoHideTmuxClientSession -bool true
-```
+点小人展开。上面是选中会话的全貌：**当前目录、分支、未提交数、最近提交、
+运行了多久、在哪个终端里**。下面是全部会话，等你处理的永远排第一。
 
-如果需要手动验证，可以打开 iTerm2 → **Settings** (⌘,) → **General** → **tmux** 查看这两项是否已勾选。
+分支和目录不是装饰 —— 同一个项目经常开好几个会话，只看项目名它们长得一模一样。
 
-### 3. macOS 权限授权
+### 点一下回到那个终端
 
-Hub 使用 AppleScript（osascript）自动控制 iTerm2 创建标签页、切换窗口。macOS 需要你授权：
+这是这个工具最初被做出来的原因。旧的做法是靠窗口名做字符串匹配，
+而 tmux 的 `automatic-rename` 会把窗口名改成前台进程名（实测出现过窗口名变成
+`2.1.173`——那是 claude 的版本号），十个窗口能对上两个。
 
-**首次运行时**，系统会弹窗询问"XXX 想要控制 iTerm2"，**必须点允许**。
+现在全程只用整数 PID 和 UUID：状态读 Claude Code 自己维护的
+`~/.claude/sessions/<PID>.json`，跳转用 iTerm 的 `jobPid` 向上走进程树。
+tmux 会话和非 tmux 会话都覆盖。
 
-如果错过了弹窗或不小心拒绝了：
+### 它停下来了而你没在看 —— 岛会一直提醒到你处理
 
-1. 打开 **系统设置** → **隐私与安全性** → **自动化**
-2. 找到 **Terminal**（或 **iTerm2**），勾选允许控制 iTerm2
-3. 如果列表里没有，运行一次 `osascript -e 'tell application "iTerm2" to activate'` 触发弹窗
+<p align="center">
+  <img src="docs/screenshots/05-nudge.png" width="500" alt="卡住的会话从刘海里弹出来排开">
+</p>
 
-### 4. 克隆并初始化
+以前岛只在**事件发生那一瞬间**提醒：完成了闪两秒，然后收回去，之后再也不吭声。
+你要是正好在看另一块屏、或者干脆没在看，这件事就永远错过了。
+一个跑了一小时、断在半路的会话，可能几小时后才被发现。
 
-```bash
-git clone https://github.com/gulu-cn/claude-hub.git ~/Documents/code/claude-hub
-cd ~/Documents/code/claude-hub
+现在只要还卡着就持续提醒，而且分得清卡在什么上：
 
-# 一键初始化：注入全局 hooks + 生成语音文件 + 自动编译托盘 app
-# Rust 环境不存在会自动安装，首次编译约 2-3 分钟，需下载约 2GB 依赖
-bash scripts/setup.sh
-```
+| | 什么情况 | 怎么测出来的 |
+|---|---|---|
+| ⚡ | 连接断了，这轮没跑完 | transcript 尾部的 `isApiErrorMessage` 标记 |
+| ❓ | 它在问你一个问题 | 最后一条回复的收尾是个问句 |
+| ⚠ | 在等授权或等你选 | Claude 自己写的 `waiting` 状态 |
+| ▸ | 做完一段，清单里还有 | `~/.claude/tasks/` 里的待办 |
+| ✓ | 安静地干完了，等你验收 | 观测到的一整段工作时长 |
 
-> **路径说明**：`cc.sh` 启动脚本中硬编码了 `~/Documents/code/claude-hub` 路径。如果你克隆到其他位置，需要修改 `scripts/cc.sh` 第 9 行的 `HUB_DIR` 变量。
+**前四类完全不靠 AI 判断** —— 都是从 Claude Code 自己落盘的文件里直接读出来的，
+不花额度、不会误报。只有"这轮到底说了什么"才会调一次
+`claude -p` 生成一句摘要，用的是你已经登录的订阅额度，不需要另配 API key。
+它失败了也只是文案糙一点，提醒照发。
 
-### 5. 添加项目
+**它也会闭嘴。** 提醒按 0 / 3 / 8 / 20 分钟递增，最多主动打断五次；
+一件事卡过两小时之后就只留跑马灯，不再弹出来。
+固定间隔地喊在"我知道但暂时不想处理"的时候会变成必须关掉的骚扰 ——
+一个提醒功能只有在会闭嘴的时候才有人愿意留着它。
 
-```bash
-# 自动扫描目录下所有 git 仓库
-bash scripts/scan-projects.sh ~/Documents/code
+<p align="center">
+  <img src="docs/screenshots/08-ticker.png" width="380" alt="折叠态的跑马灯">
+</p>
 
-# 或手动编辑
-cp projects.yaml.example projects.yaml
-vim projects.yaml
-```
+收起来的时候，卡住的事在下唇滚动。静止的小徽章在余光里等于不存在。
 
-### 6. 配置启动别名（推荐）
+### 不用切过去，直接在岛上回答
 
-```bash
-echo 'alias cc="bash ~/Documents/code/claude-hub/scripts/cc.sh"' >> ~/.zshrc
-source ~/.zshrc
-```
+<p align="center">
+  <img src="docs/screenshots/06-answer.png" width="560" alt="岛上的快捷回答">
+</p>
 
-之后只需输入 `cc` 即可一键启动调度中心（自动拉起托盘 app + 启动 Claude）。
+AI 问"需要我帮你推送到 live 吗？"的时候，切过去只是为了敲一个"是"。
+点小人直接在岛上答，选项由 AI 从上下文里给。
 
-### 7. 浏览器自动化（可选）
+**点了不会直接发。** 先显示「将发送到 iTerm · xxx：是」让你确认一次 ——
+刘海很小，而那一下可能是往生产环境推代码。发送前还会重读一次会话状态，
+中途变成在干活就取消并告诉你（说明你已经自己在那边动手了）。
+只发一行纯文本 + 回车，不发控制字符、不发多行。
 
-```bash
-bash scripts/setup-browser.sh
-```
+<p align="center">
+  <img src="docs/screenshots/07-stall-detail.png" width="620" alt="展开态里的滞留横幅和行内徽章">
+</p>
 
-前置要求：
-- **Chrome >= 144**（支持 autoConnect 模式）
-- **Claude in Chrome 扩展**已安装
+展开列表里每一行都带着自己卡在什么上，选中的那个把原因摊开在详情卡里。
 
-配置完成后还需在 Chrome 地址栏输入 `chrome://inspect/#remote-debugging`，点击 **Enable**，然后重启 Claude Code 会话。
+### 跟着你在看的那块屏走
 
-### 8. 启动
+岛以前锁死在内建的刘海屏上。接了外接显示器的话，你看着另一块屏时，
+任何提醒在物理上都不在你的视野里 —— 那时候再怎么加动效都是白做。
+现在光标在哪块屏，岛就在哪块屏；没有刘海的屏上用胶囊形态。
 
-```bash
-cc          # 如果配了别名
-# 或
-claude      # 在 claude-hub 目录直接启动
-```
+只在收起来的时候搬家。展开着的时候搬会把你正要点的按钮从指针底下挪走。
 
-启动后 Claude 会根据 CLAUDE.md 的启动序列自动执行：拉起通知面板 → 显示项目列表 → 检查 tmux → 报告就绪。
+### 从岛上直接开项目
 
-## 前置条件汇总
+<img src="docs/screenshots/03-expanded-projects.png" width="560" alt="项目列表，可直接启动">
 
-| 依赖 | 用途 | 安装方式 |
-|------|------|---------|
-| macOS + iTerm2 | 终端环境 | 手动安装 |
-| tmux >= 3.0 | 多窗口管理 + `-CC` 模式 | `brew install tmux` |
-| terminal-notifier | 桌面通知弹窗（点击可跳转） | `brew install terminal-notifier` |
-| Node.js | Claude Code CLI + MCP 工具 | `brew install node` |
-| Claude Code CLI | Claude 命令行 | `npm i -g @anthropic-ai/claude-code` |
-| Xcode CLT | 编译 Rust 代码 | `xcode-select --install` |
-| Rust | 编译托盘 app | `setup.sh` **自动安装** |
+「开发 xxx」是最高频的动作，不该要求先打开一个主窗口。
+跑着会话的项目排前面，点一下就切过去；没跑的点一下直接起一个。
+右侧的 `⋯` 里可以选 `--continue`、跳过权限、只开终端等等。
 
-> Apple Silicon（M1/M2/M3/M4）和 Intel Mac 均支持，托盘 app 在本机编译，无架构兼容问题。
+### 它说做完了，拿真实 diff 复核
 
-> 以下工具为 macOS 内置，无需安装：`say`（语音合成）、`afplay`（音频播放）、`osascript`（AppleScript 执行）、`python3`（JSON 处理）。
+同时开五六个会话时，真正的成本不是等待，是**核对**。每个会话结束都给你一份看起来很完整的报告，而你没有精力逐个去仓库里翻。
 
-## 工作原理
+Hub 从**你的原话和你批准过的计划**里拆出要点（不是 Claude 自己列的 todo —— 那份天然会漏掉它不想做的事），按项目累积、跨会话保留。它收工时被拦下来逐条报证据，然后走旁路复核：拿真实的 `git diff` 去对，**说辞只用来定位该看哪几个文件，以 diff 为准**。
 
-```
-你 ← 桌面通知 + 语音 + 托盘面板 ← 全局 Hook
- ↓
-Hub Claude（调度中心窗口）
- ├── tmux 窗口: acme-erp     → Claude / 终端
- ├── tmux 窗口: my-api        → Claude / 终端
- └── tmux 窗口: my-frontend   → Claude / 终端
-```
+结论只有两档：**已验收** / **疑似未做**。刻意不留"部分完成"—— 有中间档的话模型会一律往那里躲，产出一个什么都没说的结论。
 
-Hub 是你和所有项目 Claude 之间的调度层：
-- 你说"开发 xxx" → Hub 自动创建 tmux 窗口
-- 你说"在 xxx 跑构建" → Hub 发送命令到对应窗口
-- 任何窗口的 Claude 做完事 → 你收到通知
+还有一档更隐蔽的漏：**它压根不提的事，没有任何东西会去查**。所以另有一条独立的路直接去仓库里搜（commit 信息、改动文件名、现有文件名三处），一点痕迹都没有的会被单拎出来问。
 
-## 灵动岛（Claude Hub.app）
+想更进一步，可以让 Hub 自己跑 `swift test` 之类来验，而不是听它说"测过了"。这是全案唯一会执行命令的功能，三道闸：白名单（argv 开头完全匹配，刻意排除 `npx`、`npm install` 和 git 的一切写操作）、拒绝 shell 元字符（不转义，直接拒）、默认关且每条命令首次执行前要你点头。
 
-原生 SwiftUI 应用，把 MacBook 刘海变成 AI agent 的控制中心。要求 **macOS 26+**，自己编译还需要 **Xcode 26**。
+### 它停下来就追问，直到活干透
 
-```bash
-bash scripts/build-swift-app.sh      # 编译 + 签名 + 安装到 /Applications
-bash scripts/setup-swift-hooks.sh    # 安装 hook 到 ~/.claude/settings.json
-open -a "Claude Hub"
-```
-
-### 打发布包
-
-```bash
-bash scripts/release.sh              # 跑测试 → universal 编译 → 签名 → dmg
-```
-
-产物在 `release/Claude-Hub-<版本>.dmg`，arm64 + x86_64 双架构。
-和日常构建的分工：`build-swift-app.sh` 只编当前架构、装进 `/Applications`，几秒钟；
-`release.sh` 打完整发布包，**不碰你正在用的那个实例**。
-
-包是**自签名、未公证**的。自己的机器没问题，别人下载后首次打开会被 Gatekeeper 拦，
-需要右键 → 打开，或者 `xattr -dr com.apple.quarantine "/Applications/Claude Hub.app"`。
-要做到双击即用得有 Apple Developer Program 的 Developer ID 证书 + 公证。
-
-**同一个 bundle identifier 只允许对应 /Applications 里那一个 .app。** 留第二份副本
-（哪怕只是"调试用"）会让 LaunchServices 注册出多条记录，通知授权和 TCC 授权互相抢，
-存活判断也会误匹配 —— 构建脚本因此装完就删掉暂存副本。
-
-### 五种形态
-
-| 形态 | 触发 | 内容 |
-|------|------|------|
-| **折叠** | 常驻 | 贴刘海挤出一条 14pt 的"下唇"：会话数 + 状态点阵 + 待办徽章 |
-| **悬停** | 鼠标靠近 | 每个会话一个 32pt 像素小人，状态驱动动作 + 一行统计 |
-| **展开** | 点击 | 完整会话列表，点一行精准跳回对应终端 tab |
-| **闯入** | 会话完成 / 需要输入 | 主动膨胀提示，2–2.6 秒后回落 |
-| **审批** | 拦截到不可逆操作 | 命令内容 + 拒绝/按住确认，**不会自动消失** |
-
-无刘海的外接显示器上，折叠态自动退化为屏幕顶部的悬浮胶囊。
-
-### 像素小人
-
-每个运行中的会话配一个，动作由状态驱动：`busy` 敲键盘、`waiting` 抬头挥手、`shell` 敲命令行、`idle` 呼吸 + 偶发打哈欠（按 sessionId 错峰，避免所有人同时打哈欠）。
-
-全部小人共用一个 12fps 主时钟，折叠态 / 窗口被遮挡 / 锁屏 / 显示器休眠时整体冻结。
-
-## 实时会话监控
-
-状态来自 Claude Code 自己维护的 `~/.claude/sessions/<PID>.json`，是**权威数据**而非推断：
-
-| 状态 | 含义 |
-|------|------|
-| `busy` | 正在干活 |
-| `waiting` | 等你输入或授权（附带 `waitingFor` 说明原因） |
-| `shell` | 正在跑 shell 命令 |
-| `idle` | 空闲 |
-
-同时区分 `interactive`（前台会话）和 `bg`（后台任务）。
-
-## 精准跳转
-
-点通知、点岛上的会话行，都会跳到**那个会话所在的具体终端 tab**。
-
-实现方式是从 iTerm 的 `jobPid` 向上遍历进程树，第一个存在 `sessions/<PID>.json` 的祖先就是该 tab 承载的会话 —— 全程只用整数 PID 和 UUID，不做任何字符串匹配。tmux `-CC` 会话和非 tmux 的原生会话用同一套算法。
-
-`kind: bg` 的会话跑在 daemon 下、不在任何终端里，改为定位到显示它的 `claude agents` 查看器 tab。
-
-## 验收清单
-
-解决的不是「它有没有回答」，是**「它有没有做」**。
-
-同时开五六个会话时，真正的成本不是等待，是**核对**。每个会话结束时都会给一份看起来很完整的报告，而你没有精力逐个去仓库里翻。清单把这件事变成可数的。
-
-### 要点从哪来
-
-不是 Claude 自己列的 todo —— 那份天然会漏掉它不想做的事。要点按来源分级：
-
-| 来源 | 说明 | 权威性 |
-|------|------|--------|
-| `plan` | 你批准过的计划里拆出来的 | 最高 |
-| `userPrompt` | 你的原话里拆出来的 | 高 |
-| `inferred` | 推导出的隐含项（改了 A 就得同步 B），你没明说，所以单独标出来 | 中 |
-| `claudeTodo` | Claude 自己列的 todo | 参考 |
-| `manual` | 你手敲的 | — |
-
-按项目累积、跨会话保留。上下文被压缩、会话被 resume，清单都还在 —— **这套系统存在的理由就是「压缩会让人忘事」**。
-
-### 它说做完了之后
-
-Stop hook 拦下收工那一刻，要它逐条报证据（哪个文件、哪几行）。然后走**旁路复核**：拿真实的 `git diff` 去对，说辞只用来定位该看哪几个文件，**以 diff 为准**。
-
-结论只有两档，`confirmed` 和 `disputed`，没有"部分完成"：
-
-| 状态 | 含义 |
-|------|------|
-| 待验收 | 还没报过 |
-| 已验收 | 自报做完，且 diff 里找得到对应改动 |
-| **疑似未做** | **自报做完了，但真实 diff 里找不到** |
-
-刻意不留中间档。有"部分完成"的话，模型会一律往那一档躲，产出一个什么都没说的结论；逼它二选一、拿不准算 `disputed`，代价只是让人多看一眼。
-
-还有一档更隐蔽的漏：**它压根不提的事情，没有任何东西会去查**。所以另有一条独立的路 —— 直接去仓库里搜（commit 信息、改动文件名、现有文件名三处），一点痕迹都没有的会被单拎出来问。
-
-### 让 Hub 自己跑验收命令（默认关）
-
-开了之后 Hub 可以自己跑 `swift test` 之类来验证，而不是听它说"测过了"。这是全案唯一会执行命令的功能，三道闸缺一不可：
-
-1. **白名单**：argv 开头必须完全匹配（`swift test`、`npm run`、`go test`、`bash scripts/`、`git diff/status/log` 等）。刻意排除 `npx` / `pnpm dlx`（会下载执行任意包，白名单等于形同虚设）、`npm install`（有副作用）、git 的一切写操作。
-2. **拒绝 shell 元字符**：不做转义，直接拒。配合 `execve` 执行，不经过 shell。
-3. **默认关 + 逐条授权**：总开关默认 off；开了之后每条新命令首次执行前还要你在验收页点「允许」。
-
-## 会话观察者（盯梢）
-
-给某个项目打开盯梢后，它停下来就会被追问，直到活真的干透。
-
-### 它解决的不是「停了」，是「做浅了」
-
-只会说「继续」的盯梢能防它停，防不了它**每次都继续、每次都做表面功夫**，最后交一份看起来很完整的报告。所以追问是一份轮换的清单，每条都是一个它不想被问的角度：
+只会说「继续」的盯梢能防它停，防不了它**每次都继续、每次都做表面功夫**。所以追问是一份轮换的清单，每条都是一个它不想被问的角度：
 
 > 这轮的产出具体落到了哪些文件？给完整路径。答不上路径就说明只写了结论没落地。
 >
 > 你落的那些改动，下一次构建/发布之后还在不在？不确定就去看构建脚本，别猜。
->
-> 你自己列的 todo 逐条对一遍：哪些真做完了、哪些只是勾了框？
 
-三种追问交替发：**通用清单**（上面这些，可以在设置里换成你自己的）、**从验收清单当场生成的具体条目**（"你说做完了「X」，但真实 diff 里找不到，具体是哪个文件的哪几行？"）、以及**针对它刚说的那段话临时想的问题**。
+三种问法交替：通用清单（可以换成你自己的）、从验收清单当场生成的具体条目（"你说做完了「X」，但 diff 里找不到，是哪个文件的哪几行？"）、以及针对它刚说的那段话临时想的问题。只问通用的，几轮之后它就摸清套路；只问清单又变成对答案。
 
-只问通用的，几轮之后它就摸清套路、答案越来越像模板；只问清单又变成对答案。
+三条硬约束都是实机撞出来的：**只有 `busy` 算在干活**（`shell` 是挂着后台命令，早期当成在干活，停了 20 分钟一次没催到）；**你在打字时绝不发**（注入是往光标位置敲字，会拼到你没发完的那句后面）；**画面在变就不打扰**（慢命令往外吐输出时转圈符号会被滚屏顶掉，看画面比看符号可靠）。
 
-### 三条硬约束（都是实机撞出来的）
+**默认全关。** 它会往你的终端里敲字，不该在你不知情时自动插话。
 
-1. **只有 `busy` 算在干活。** `shell` 表示挂着后台 shell，和它在不在思考无关 —— 早期把它当成在干活，会话停了 20 分钟一次没催到。
-2. **你在输入框里打字时绝不发。** 注入是往当前光标位置敲字，会直接拼到你没发完的那句后面，改变你本来要说的意思。
-3. **画面在变就不打扰。** 慢命令往外吐输出时状态可能是 `shell`、转圈符号可能被滚屏顶掉，但画面一直在变 —— 这比"有没有转圈符号"可靠得多。
+### 关掉终端窗口就是结束
 
-### 节奏
+tmux 的默认语义是「关窗口 = detach，进程照跑」。这和人的直觉相反：你关掉窗口就是干完了，之后看到界面上「1 个会话」还亮着，只会认为界面在撒谎。
 
-Stop hook 一报收工就判断（等 12 秒，给你留出插话的时间），45 秒轮询作兜底。两次追问之间至少隔 3 分钟 —— 它读完一条要想一会儿，催太密就是打断。发送分两步：先文字、停一下、再回车，合在一起时终端偶尔会把回车吃进上一段输入里，看起来催过了其实一个字没送。
+现在检测到没有终端连着就结束它 —— 但**结束前先把 sessionId 记下来**，项目行上出现「接着上次」，一键回到原来的上下文。只记真有 transcript 的：一次都没说过话的会话没有 transcript，记了只会长出一个点下去报错的按钮。
 
-**默认全关。** 它会往你的终端里敲字，装上 Hub 的人不该在不知情时被自动插话。
+不在 tmux 里的会话（VS Code 扩展、直接开的终端）一个都不碰 —— 那种情况判断不了"有没有终端连着"。新起的会话有 90 秒宽限，否则 iTerm 冷启动那几秒会把你刚点开的项目当场杀掉。
 
-## 高风险操作审批
+### 高风险操作在岛上拦一下
 
-`PreToolUse` hook 会拦截**不可逆**操作，在岛上弹出审批：
+如果你和很多人一样开着 `--dangerously-skip-permissions`，那就没有任何刹车了。
+Claude Hub 只拦**不可逆**的那一档（`rm -rf /`、`git push --force` 到 main、
+`drop database`、`kubectl delete` 之类），弹在岛上，拒绝是超时的默认值。
 
-| 级别 | 例子 | 默认行为 |
-|------|------|----------|
-| 普通 | `npm install`、`git commit` | 直接放行 |
-| 危险 | `rm -rf node_modules`、`git reset --hard`、`sudo` | 只记进审批日志，不拦截 |
-| 不可逆 | `rm -rf /`、force push 到 main、`DROP DATABASE` | **拦截**，需按住 900ms 确认 |
+日常的危险操作（`rm -rf ./tmp`、`git reset --hard`）默认**只记录不拦截** ——
+按日常用量拦上这一档每天要弹三到八次，结果必然是你把整个功能关掉。
+先看一周审批日志，再决定要不要收紧。
 
-默认只拦最后一档，把日常摩擦压到接近零。想更严格可以在设置里把「危险」一档也打开 —— 建议先看一周审批日志再决定。
+### 深挖用的主窗口
 
-防误点做了六重保护：按钮间距 24pt 不融合、出现后 700ms 时间锁、指针进入 120ms 冷却、不可逆操作必须长按、**默认焦点在拒绝**（`⏎` 和 `⎋` 都是拒绝，允许必须 `⌘⏎`）、60 秒超时自动拒绝。
+<img src="docs/screenshots/04-main-window.png" width="720" alt="主窗口">
 
-## 主窗口
+岛负责「一瞥」，主窗口负责「深挖」：token 用量趋势、项目管理、审批日志。
 
-托盘菜单 → 打开主窗口。五个分区：会话 / 项目 / 用量 / 审批日志 / 设置。
+## 工作原理
 
-和岛的分工：**岛是一瞥**（零点击获取状态），**主窗口是深挖**（用量趋势、项目管理、审批历史）。两者共享同一套数据和组件。
+不做任何猜测，四个数据源都是权威的：
 
-## 项目管理
+| 要回答的问题 | 数据来源 |
+|---|---|
+| 哪些会话在跑、状态是什么 | `~/.claude/sessions/<PID>.json`（Claude Code 自己写的） |
+| 这个会话在哪个终端 | iTerm 的 `jobPid` + 进程树祖先链求交 |
+| 干完了 / 要授权了 | Claude Code 的 `Stop` / `Notification` / `PreToolUse` hook |
+| 分支、变更数、提交记录 | 按会话的 cwd 直接跑 `git` |
+| 这轮是不是断在半路 | transcript 尾部的 `isApiErrorMessage` |
+| 还有没有没做完的 | `~/.claude/tasks/<会话>/*.json` |
 
-```bash
-# 扫描目录下所有 git 仓库
-bash scripts/scan-projects.sh ~/Documents/code
+读 transcript 只读**文件尾部 64 KB**。这些 jsonl 单个能到几十 MB，
+整个读进内存的话页面就再也转不出来了。
 
-# 手动添加项目
-bash scripts/add-project.sh my-app ~/code/my-app app 前端
+hook 走 Unix socket 和应用通信。**应用没在运行时立即放行** ——
+一个监控工具不该让你的命令跑不起来。
 
-# 查看项目列表
-bash scripts/welcome.sh
-```
+## 常见问题
 
-主窗口的「项目」页也能直接扫描、搜索、按 8 种模式启动（Claude Code / 跳过权限 / 纯终端 / 继续上次会话 / 选择历史会话 / Finder / VS Code）。
+**要装什么依赖吗？**
+不用。零第三方依赖，一个 3.6 MB 的应用。
 
-**右键任意项目行**就能弹出这个菜单，岛和主窗口用的是同一份内容。
+**必须用 tmux 或 iTerm 吗？**
+不必须。tmux 和 iTerm 里的会话跳转最准；其它终端会降级成"把终端拉到前面"。
+岛上应答也一样：定位不到具体窗口时它不会乱发，退化成"跳过去"。
 
-### 「添加目录」和扫描的分工
+**会读我的代码吗？**
+不会。只读 `~/.claude/sessions/` 和 `~/.claude/tasks/` 里的状态文件、
+transcript 的尾部，以及在项目目录跑 `git status` / `git log`。
 
-扫描只认有 `.git` 的目录，而且**撞到 `.git` 就停止下钻**。所以 monorepo 里的子目录、还没 git init 的目录永远扫不进来 —— 那类项目用「添加目录」手工选，不限于 git 仓库。
+**那个 AI 摘要会把我的代码发出去吗？**
+它把**最后一条回复的正文**（截断到 2000 字）交给 `claude -p` 生成一句摘要，
+走的是你本机已登录的 Claude Code，和你平时用的是同一条链路、同一份额度。
+除此之外不联网。这一层可以关掉，关掉之后前四类提醒照常工作。
 
-### 失效项目
+**它会不会一直烦我？**
+最多主动打断五次，卡过两小时就只留跑马灯。详见上面那节。
 
-目录被删掉之后，清单里那条不会自己消失，而且它是**静默有害**的：`tmux` 对不存在的 `-c` 目录**返回 0 并悄悄用家目录**，`open` 则什么都不做。表现出来就是「Finder 没反应」+「Claude 开到了 `~`」，看起来像界面坏了。
+**Intel Mac 能用吗？**
+能，包是 universal 的。要求 macOS 26+。
 
-所以目录没了的项目会被标出来（岛上尤其必要 —— 那里不显示路径），右键菜单只留「从列表移除」，工具栏出现「清理失效 N」。**只动清单，不碰磁盘上的任何文件。**
+**支持 Codex / Gemini CLI 吗？**
+还不支持，目前只认 Claude Code。Codex 的会话记录（`~/.codex/sessions/`）
+和状态模型都调研过，接得上，但状态是"在跑还是在等"这一层要另走一条路。
 
-## 关掉终端窗口就结束会话
+## 已知限制
 
-tmux 的默认语义是「关窗口 = detach，进程照跑」。这对跑长活是对的，但和人的直觉相反：你关掉窗口就是干完了，之后在界面上看到「1 个会话」亮着，只会认为界面在撒谎。
+- 岛跟随光标换屏做完了，但外接屏上的胶囊形态没在 4K 屏上逐项核对过
+- 提醒阶梯的 3 / 8 / 20 分钟三档有单测覆盖，但真实使用里还没连续观测满一整轮
+- 应用未经 Apple 公证，首次打开要绕一下 Gatekeeper
 
-打开这个开关（默认开，设置里可关）后，检测到没有终端连着就结束它。四条边界：
-
-- **结束前先把 sessionId 记进名册**，项目行和右键菜单出现「接着上次」，一键 `claude --resume` 回到原来的上下文。
-- **只记接得回来的**。`--resume` 认的是磁盘上那份 transcript，不是 id 本身；一次都没说过话的会话没有 transcript，记了只会长出一个点下去报错的按钮。
-- **绑不到 tmux pane 的一个都不碰**。不在 tmux 里的会话（VS Code 扩展、直接开的终端、后台任务）判断不了"有没有终端连着"，杀它们等于拿"不知道"当处决理由。
-- **新起的会话 90 秒宽限 + 连续两轮确认**。建会话是先建 detached 再让终端 attach 的，iTerm 冷启动那几秒客户端数就是 0 —— 没宽限期会把你刚点开的项目当场杀掉。
-
-关掉开关则什么都不杀，只在项目行上标成「终端已关」。
-
-## 开发
-
-```bash
-cd HubKit
-swift build          # 编译
-swift test           # 87 个测试
-swift run hubprobe list      # 命令行查看会话与终端绑定
-swift run hubprobe jump 3    # 跳到第 3 个会话
-```
-
-工程结构见 `HubKit/`，实测踩过的坑记在 `HubKit/NOTES.md`。
-
-## 浏览器自动化
-
-Claude in Chrome（视觉引擎）+ chrome-devtools-mcp（数据引擎）双引擎协同，连接同一个 Chrome 浏览器。
-
-**前置要求：**
-- Chrome >= 144（支持 autoConnect 模式）
-- Claude in Chrome 扩展已安装
-- Chrome remote debugging 已启用
+## 从源码构建
 
 ```bash
-# 一键配置（安装 skill + 配置 MCP + 检查 Chrome 环境）
-bash scripts/setup-browser.sh
+git clone https://github.com/gulugulu-cn/claude-hub.git ~/Documents/code/claude-hub
+cd ~/Documents/code/claude-hub
+bash scripts/setup.sh            # 注入 hook + 编译安装
 ```
 
-配置完成后：
-1. Chrome 地址栏输入 `chrome://inspect/#remote-debugging`，点击 Enable（一次性操作）
-2. 重启 Claude Code 会话
+需要 macOS 26 SDK（Xcode 26）—— 灵动岛依赖 Liquid Glass API。
 
-## 故障排查
-
-### 通知不工作
+装机步骤、开发命令、故障排查、目录结构和每个模块的实现细节，
+都在 [docs/安装与实现.md](docs/安装与实现.md)。
 
 ```bash
-# 1. 检查 hook 是否已注入
-cat ~/.claude/settings.json | python3 -m json.tool | grep -A5 hub-hook
-
-# 2. 手动触发测试（应该听到语音 + 看到桌面通知）
-bash scripts/hub-hook-stop.sh
-
-# 3. 检查 terminal-notifier
-which terminal-notifier || echo "未安装，运行: brew install terminal-notifier"
-```
-
-### iTerm2 标签页不显示
-
-- 确认 iTerm2 设置：**Settings → General → tmux** → 两个选项都勾选（见上方 "配置 iTerm2" 章节）
-- 确认 tmux 版本：`tmux -V`（需要 >= 3.0）
-- 手动测试：在 iTerm2 中执行 `tmux -CC new -s test`，应该弹出新的原生标签页
-
-### osascript 权限报错
-
-```
-Not authorized to send Apple events to iTerm2
-```
-
-1. 打开 **系统设置** → **隐私与安全性** → **自动化**
-2. 找到 Terminal（或 iTerm2），勾选允许控制
-3. 手动验证：`osascript -e 'tell application "iTerm2" to activate'`
-
-### 灵动岛不出现 / 点不动
-
-```bash
-# 1. 确认跑的是新版（可执行文件名叫 ClaudeHub）
-pgrep -x ClaudeHub || open -a "Claude Hub"
-
-# 2. 重新编译安装
-bash scripts/build-swift-app.sh
-
-# 3. 确认 hook 链路通
-~/.local/bin/hubctl doctor
-```
-
-判断是否在运行**必须**用 `pgrep -x ClaudeHub`。用 `pgrep -f "Claude Hub"`
-会匹配到任何路径里含这个串的进程，历史上仓库里同时存在过三个同名 bundle，
-导致明明没在跑也被判成"已运行"。
-
-### app 编译失败
-
-```bash
-# 需要 Xcode 26（macOS 26 SDK）——灵动岛依赖 Liquid Glass API
-xcrun --show-sdk-version    # 应 >= 26
-sudo xcodebuild -runFirstLaunch
-```
-
-### 浏览器双引擎连不上
-
-```bash
-# 检查 Chrome 版本（需要 >= 144）
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --version
-
-# 检查远程调试端口
-curl -s localhost:9222/json/version
-
-# 检查 MCP 配置（应包含 --autoConnect）
-claude mcp get chrome-devtools
-```
-
-## 目录结构
-
-```
-claude-hub/
-├── CLAUDE.md                  # Hub 行为规范（Claude 读取此文件决定行为）
-├── projects.yaml.example      # 项目配置模板
-├── HubKit/                    # 全部业务逻辑（SwiftPM package，可 swift test）
-│   ├── NOTES.md               # 实测踩到的坑（值得先读一遍）
-│   └── Sources/
-│       ├── HubCore/           # 数据模型（AgentSession 等）
-│       ├── HubProbe/          # 会话探测：sessions/*.json + tmux + 进程树
-│       ├── HubJump/           # 跳转引擎：iTerm jobPid 祖先链
-│       ├── HubIPC/            # Unix socket + hook 协议 + 风险分级
-│       ├── HubProjects/       # projects.yaml + git 状态 + 终端派发
-│       ├── HubUI/             # 灵动岛 + 主窗口（SwiftUI）
-│       ├── hubctl/            # hook 可执行文件
-│       └── ClaudeHubApp/      # 薄壳：@main + 窗口装配
-├── Resources/AppIcon.icns
-├── scripts/
-│   ├── setup.sh               # 一键初始化（hook + 编译安装）
-│   ├── setup-swift-hooks.sh   # 装 hubctl 并改写 ~/.claude/settings.json
-│   ├── build-swift-app.sh     # 编译 + 签名 + 安装到 /Applications
-│   ├── setup-browser.sh       # 浏览器环境配置
-│   ├── cc.sh                  # 一键启动（app + 调度中心）
-│   ├── scan-projects.sh       # 扫描目录发现项目
-│   ├── add-project.sh         # 添加项目
-│   ├── welcome.sh             # 项目列表展示
-│   ├── project-menu.sh        # tmux 窗口菜单
-│   ├── hub-run.sh             # 命令包装（带信号）
-│   └── hub-notify.sh          # 手动通知
-├── skills/
-│   ├── tmux-hub/              # 终端调度 skill
-│   ├── browser-auto/          # 浏览器自动化 skill
-│   └── lanhu-design-viewer/   # 设计稿查看 skill
-└── sounds/                    # 语音文件（setup.sh 自动生成）
-    ├── done1~5.aiff           # "搞定了" 等 5 种完成语音
-    └── auth1~3.aiff           # "需要授权" 等 3 种提示语音
+cd HubKit && swift test          # 518 个测试
+bash scripts/release.sh          # 打 universal + dmg
 ```
 
 ## License
 
-MIT
+MIT，见 [LICENSE](LICENSE)。截图和文档同样适用。
