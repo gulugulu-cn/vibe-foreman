@@ -8,6 +8,10 @@
 
 它不只是让你看见 agent 在干嘛 —— 它盯着它们**有没有真的把活干完**。
 
+<p align="center">
+  <a href="docs/poster.png"><img src="docs/poster.png" width="820" alt="功能一览"></a>
+</p>
+
 同时跑七八个 Claude Code 会话的时候，最难受的是三件事：**不知道哪个在等你**、
 **知道了也切不过去**、以及**它停下来的那一瞬你正好没在看**。
 Vibe Foreman Free 解决的就是这三件事。

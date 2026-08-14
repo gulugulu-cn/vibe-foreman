@@ -88,13 +88,13 @@ public enum DemoFixtures {
     /// 放一个语义清楚、截完能整个删掉的位置。
     public static var workspaceRoot: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Developer/claude-hub-demo", isDirectory: true)
+            .appendingPathComponent("Developer/vibe-foreman-demo", isDirectory: true)
     }
 
     /// 演示用的根目录。每次启动重建，退出后留着也无所谓（在临时目录里）。
     public static var root: URL {
         FileManager.default.temporaryDirectory
-            .appendingPathComponent("claude-hub-demo", isDirectory: true)
+            .appendingPathComponent("vibe-foreman-demo", isDirectory: true)
     }
 
     public static var sessionsDirectory: URL {
