@@ -244,6 +244,48 @@ AppleScript 语法有坑：必须写 `tell s to get variable named "jobPid"`，
 实测出现过窗口名变成 `2.1.173`。旧实现用「窗口名 == projects.yaml 的 name」
 判断项目是否运行，实测 9 个窗口只有 2 个匹配得上。身份识别绝不能依赖窗口名。
 
+### iTerm2 的包名是 `iTerm.app`，AppleScript 名才是 `iTerm2`
+
+`/Applications/iTerm.app/Contents/MacOS/iTerm2` —— 只有可执行文件叫 iTerm2。
+旧 `isInstalled` 拿 AppleScript 名拼 `/Applications/iTerm2.app`，永远找不到，
+`detectTerminal()` 一路降级到 macOS 终端。
+
+**这个 bug 藏了很久**，因为平时 hub session 已存在且有客户端连着，
+走的是 `addWindow`，压根不碰终端检测；只有**开机后第一次建 session**
+才会走 `createSession` → `detectTerminal()`，于是现象是
+「重启后开项目弹的是系统终端」，看起来像和重启有关，其实和重启无关。
+
+判装没装一律走 bundle id + LaunchServices（`NSWorkspace.urlForApplication`），
+路径只做兜底 —— 用户可能装在 `~/Applications`、Setapp 目录、或者改过包名。
+
+### macOS 的 `pgrep` 默认不匹配自己的祖先进程
+
+要加 `-a` 才把祖先算进来。所以 `pgrep -x iTerm2` 在**从 iTerm 里跑起来的**
+hubctl / hubprobe 里恒为假 —— 跳转会报「iTerm2 未运行」，终端派发会以为
+iTerm 没起来而重复 `open`。判 app 在不在跑用
+`NSRunningApplication.runningApplications(withBundleIdentifier:)`，
+它也不会像 `tell app "iTerm2" to running` 那样触发冷启动。
+
+（同理：CLAUDE.md 里那条「必须用 `pgrep -x ClaudeHub`」讲的是**另一个**坑
+—— `-f` 会子串匹配到历史遗留的同名 bundle。两条别混。）
+
+### 关掉终端不会结束会话，`kill(pid, 0)` 判不出来
+
+claude 的父进程是 tmux server，关窗口只是 detach，进程照跑。于是
+`ClaudeSessionReader` 的判活依然为真，项目行一直亮着蓝点写「1 个会话」,
+而用户明明已经把窗口关了 —— 他会认定界面在撒谎。
+
+界面没撒谎，它只是把「进程活着」当成了「会话在线」。这是两件事，
+一颗点表达不了。真相要两半都说：还在跑，但你找不到它了。
+判据是 `tmux list-clients -F '#{client_session}'` 里有没有该 pane 所属的会话名
+（`SessionStore.detachedIds`）。
+
+两个不能省的边界：
+- **按 tmux 会话名判，不是「有没有任何客户端」** —— 客户端可能连在别的 session 上。
+- **绑不到 pane 的不算 detached**。那是「根本不在 tmux 里」（VS Code 扩展、
+  直接开的终端、bg 任务），有没有终端连着这里判断不了，
+  硬报 detached 就是拿"不知道"当结论，会让一堆正常会话集体显示成"终端已关"。
+
 ## 打包与签名
 
 ### 辅助可执行文件不能放 `Contents/MacOS/`

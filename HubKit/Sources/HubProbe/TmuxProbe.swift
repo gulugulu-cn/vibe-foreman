@@ -77,6 +77,27 @@ public struct TmuxProbe: Sendable {
         }
     }
 
+    /// 当前有客户端连着的 tmux 会话名。
+    ///
+    /// 用来区分「会话真的在跑」和「会话在跑但终端已经关了」。这两种在进程层面
+    /// 完全一样（claude 的父进程是 tmux server，关掉终端只是 detach，进程照活），
+    /// 所以只看 `kill(pid, 0)` 会把已经关掉终端的会话报成在线 ——
+    /// 用户看到的是「1 个会话」亮着蓝点，而他明明已经把窗口关了。
+    ///
+    /// tmux server 没跑时返回空集合（不是错误）。
+    public func attachedSessionNames() -> Set<String> {
+        let result = Shell.run(
+            tmuxPath, ["list-clients", "-F", "#{client_session}"], timeout: 3
+        )
+        guard result.succeeded else { return [] }
+        return Set(
+            result.stdout
+                .split(separator: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+        )
+    }
+
     /// 把每个 pane 绑定到它承载的 Claude 会话 PID。
     ///
     /// 用**祖先链求交**而不是 `panePid == sessionPid` 直接相等：实测 8 个窗口里

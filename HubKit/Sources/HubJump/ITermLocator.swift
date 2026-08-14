@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import HubProbe
 
@@ -114,6 +115,11 @@ public struct ITermLocator: Sendable {
     /// 没跑就别付 AppleScript 的成本 —— 更重要的是，对没运行的 app 发 AppleEvent
     /// 会**触发冷启动**，用户点一下跳转结果弹出个空 iTerm 窗口，体验很差。
     public static func isRunning() -> Bool {
-        Shell.run("/usr/bin/pgrep", ["-x", "iTerm2"], timeout: 2).succeeded
+        // 不能用 `pgrep -x iTerm2`：macOS 的 pgrep **默认排除自己的祖先进程**
+        //（要加 `-a` 才算上）。hubprobe / hubctl 通常就跑在 iTerm 里，
+        // 于是「iTerm 在跑吗」恒为否，跳转直接报「iTerm2 未运行」。
+        // NSRunningApplication 不会冷启动 app，满足上面那条约束。
+        !NSRunningApplication
+            .runningApplications(withBundleIdentifier: "com.googlecode.iterm2").isEmpty
     }
 }

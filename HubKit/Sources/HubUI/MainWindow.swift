@@ -196,6 +196,43 @@ struct GitChip: View {
     }
 }
 
+/// 项目行最左边那颗状态点。
+///
+/// 三态，不是两态：没会话（灰实心）、有会话且终端连着（蓝实心）、
+/// 有会话但终端全关了（蓝空心）。第三态以前和第二态长得一模一样 ——
+/// 用户关掉终端后仍看到亮着的蓝点，认定界面在骗人。它没骗人，
+/// 进程确实还在跑，但**「在跑」和「你还找得到它」是两件事**，
+/// 一颗点表达不了两件事。
+struct SessionDot: View {
+    let running: Int
+    let detached: Int
+
+    private var allDetached: Bool { running > 0 && detached == running }
+
+    var body: some View {
+        Group {
+            if running == 0 {
+                Circle().fill(Color.secondary.opacity(0.3))
+            } else if allDetached {
+                Circle().strokeBorder(IslandTheme.busy.opacity(0.65), lineWidth: 1.6)
+            } else {
+                Circle().fill(IslandTheme.busy)
+            }
+        }
+        .frame(width: 8, height: 8)
+        .help(SessionDot.tooltip(running: running, detached: detached))
+    }
+
+    static func tooltip(running: Int, detached: Int) -> String {
+        guard running > 0 else { return "没有会话在跑" }
+        guard detached > 0 else { return "\(running) 个会话在跑" }
+        if detached == running {
+            return "\(running) 个会话还在后台跑，但终端已经关了。tmux 里还留着，重新打开即可接上。"
+        }
+        return "\(running) 个会话在跑，其中 \(detached) 个的终端已经关了（进程仍在后台）。"
+    }
+}
+
 /// 内容区卡片。**实心，不用玻璃** —— 大面积玻璃在长时间阅读区会疲劳，
 /// 而且每张卡片都要采样一次背景，9 张就是 9 次。玻璃留给 sidebar 和 toolbar
 /// （那是系统自己给的）。
@@ -333,8 +370,31 @@ struct ProjectsPane: View {
 
     /// 这个项目下有没有正在跑的会话。
     private func runningCount(_ project: Project) -> Int {
+        sessions(of: project).count
+    }
+
+    /// 其中有多少是「终端已经关了、进程还在后台跑」的。
+    private func detachedCount(_ project: Project) -> Int {
+        sessions(of: project).count { store.detachedSessionIds.contains($0.sessionId) }
+    }
+
+    private func sessions(of project: Project) -> [AgentSession] {
         let root = project.expandedPath
-        return store.sessions.count { $0.cwd == root || $0.cwd.hasPrefix(root + "/") }
+        return store.sessions.filter { $0.cwd == root || $0.cwd.hasPrefix(root + "/") }
+    }
+
+    /// 一行的会话说明。
+    ///
+    /// **全部会话都断开时不能只写「N 个会话」** —— 用户已经把窗口关了，
+    /// 看到一个亮着的蓝点只会认为界面在撒谎（实机上就是这么被指出来的）。
+    /// 真相是进程还在跑，得原样说出来。
+    static func sessionSummary(running: Int, detached: Int) -> String? {
+        guard running > 0 else { return nil }
+        if detached == 0 { return "\(running) 个会话" }
+        if detached == running {
+            return running == 1 ? "1 个会话 · 终端已关" : "\(running) 个会话 · 终端都已关"
+        }
+        return "\(running) 个会话 · \(detached) 个终端已关"
     }
 
     var body: some View {
@@ -380,10 +440,12 @@ struct ProjectsPane: View {
                     ForEach(filtered) { project in
                         Card {
                             HStack(spacing: 12) {
-                                Circle()
-                                    .fill(runningCount(project) > 0
-                                        ? IslandTheme.busy : Color.secondary.opacity(0.3))
-                                    .frame(width: 8, height: 8)
+                                // 全断开时用空心点：一眼能和「真的在跑」区分开，
+                                // 又不至于和「没有会话」混成一样。
+                                SessionDot(
+                                    running: runningCount(project),
+                                    detached: detachedCount(project)
+                                )
 
                                 VStack(alignment: .leading, spacing: 3) {
                                     HStack(spacing: 8) {
@@ -396,10 +458,16 @@ struct ProjectsPane: View {
                                                 .foregroundStyle(.secondary)
                                                 .rotationEffect(.degrees(45))
                                         }
-                                        if runningCount(project) > 0 {
-                                            Text("\(runningCount(project)) 个会话")
+                                        if let summary = Self.sessionSummary(
+                                            running: runningCount(project),
+                                            detached: detachedCount(project)
+                                        ) {
+                                            Text(summary)
                                                 .font(.system(size: 10))
-                                                .foregroundStyle(IslandTheme.busy)
+                                                .foregroundStyle(
+                                                    detachedCount(project) == runningCount(project)
+                                                        ? Color.secondary : IslandTheme.busy
+                                                )
                                         }
                                     }
                                     if let description = project.description {

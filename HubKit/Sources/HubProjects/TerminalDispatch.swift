@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import HubProbe
 
@@ -69,6 +70,22 @@ public struct TerminalDispatch: Sendable {
             }
         }
 
+        /// 磁盘上 `.app` 可能叫什么。
+        ///
+        /// **`rawValue` 是 AppleScript 名，不是包名。** iTerm2 的 AppleScript
+        /// 名叫 `iTerm2`，但包实际是 `/Applications/iTerm.app`（可执行文件才叫
+        /// iTerm2）。旧实现拿 rawValue 拼路径去找 `iTerm2.app`，永远找不到，
+        /// 于是 `detectTerminal()` 一路降级到 macOS 终端 ——
+        /// 实机现象是「重启后第一次开项目弹的是系统终端」：
+        /// 平时 hub session 已存在且有客户端连着，走的是 addWindow，
+        /// 根本不经过这里；只有开机后第一次建 session 才会暴露。
+        var appBundleNames: [String] {
+            switch self {
+            case .iTerm: return ["iTerm", "iTerm2"]
+            case .terminal: return ["Terminal"]
+            }
+        }
+
         /// iTerm 用 `-CC` 控制模式，tmux 窗口会呈现为原生 tab。
         var attachCommand: String {
             switch self {
@@ -93,13 +110,29 @@ public struct TerminalDispatch: Sendable {
         return .terminal
     }
 
-    private func isInstalled(_ terminal: Terminal) -> Bool {
-        let paths = [
-            "/Applications/\(terminal.rawValue).app",
-            NSString(string: "~/Applications/\(terminal.rawValue).app").expandingTildeInPath,
-            "/System/Applications/Utilities/\(terminal.rawValue).app",
-        ]
-        return paths.contains { FileManager.default.fileExists(atPath: $0) }
+    /// 装没装。
+    ///
+    /// 首选 bundle id 走 LaunchServices —— 用户可能把 app 放在 `~/Applications`、
+    /// Setapp 目录、甚至改过名，靠猜路径迟早猜错（上面 `appBundleNames` 注释里
+    /// 那个 bug 就是猜错路径的结果）。LaunchServices 查不到时才退回路径探测，
+    /// 而且要把两个候选包名都试一遍。
+    func isInstalled(_ terminal: Terminal) -> Bool {
+        if NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminal.bundleId) != nil {
+            return true
+        }
+        return Self.installedPathCandidates(for: terminal)
+            .contains { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    /// 路径兜底的候选清单。纯函数，测试盯着它别再退化成只认 `rawValue`。
+    static func installedPathCandidates(for terminal: Terminal) -> [String] {
+        terminal.appBundleNames.flatMap { name in
+            [
+                "/Applications/\(name).app",
+                NSString(string: "~/Applications/\(name).app").expandingTildeInPath,
+                "/System/Applications/Utilities/\(name).app",
+            ]
+        }
     }
 
     // MARK: - 打开项目
@@ -215,7 +248,12 @@ public struct TerminalDispatch: Sendable {
     /// 冷启动的 app 会有一段时间接受不了 AppleEvent，这时候发脚本会静默失败。
     /// 所以要轮询探测 —— 用 `tell app to return id`，它不创建窗口、无副作用。
     private func ensureRunning(_ terminal: Terminal) {
-        if Shell.run("/usr/bin/pgrep", ["-x", terminal.rawValue], timeout: 2).succeeded {
+        // 用 bundle id 判活，不用 `pgrep -x <名字>`：
+        // ① 进程名和 AppleScript 名不一定一致；
+        // ② macOS 的 pgrep **默认把自己的祖先排除在匹配之外**（要 `-a` 才算上），
+        //    所以从 iTerm 里跑起来的 hubctl/hubprobe 问「iTerm 在跑吗」永远答否。
+        if !NSRunningApplication
+            .runningApplications(withBundleIdentifier: terminal.bundleId).isEmpty {
             return
         }
 

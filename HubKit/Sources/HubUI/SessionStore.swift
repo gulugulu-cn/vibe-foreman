@@ -21,6 +21,18 @@ public final class SessionStore {
     /// 每次渲染都算是不可接受的。所以在后台按需解析、缓存下来，视图只读缓存。
     public private(set) var terminalLabels: [String: String] = [:]
 
+    /// 进程还活着、但承载它的 tmux 会话已经没有任何客户端连着的会话。
+    ///
+    /// ## 为什么必须单独有这一档
+    ///
+    /// 关掉终端窗口**不会**结束会话：claude 的父进程是 tmux server，关窗口
+    /// 只是 detach，进程照跑。于是 `kill(pid, 0)` 依然为真，界面上一直亮着
+    /// 「1 个会话」的蓝点，而用户明明已经把窗口关了 —— 他会认为界面在撒谎。
+    ///
+    /// 真相是「还在跑，只是没终端连着」。这两件事都要说，少说哪一半都不对：
+    /// 报成已退出会掩盖一个还在烧 token 的进程，报成在线又和用户看到的相反。
+    public private(set) var detachedSessionIds: Set<String> = []
+
     /// cwd → 该工作区的 git 快照（分支、变更数、最近提交）。
     ///
     /// 按 **cwd** 而不是按 projects.yaml 里的项目采集：会话可能开在任意目录、
@@ -55,6 +67,8 @@ public final class SessionStore {
     private var lastTerminalResolve: Date = .distantPast
     private var resolvingGit = false
     private var lastGitResolve: Date = .distantPast
+    private var resolvingDetached = false
+    private var lastDetachedResolve: Date = .distantPast
 
     public init(
         reader: ClaudeSessionReader = ClaudeSessionReader(),
@@ -123,6 +137,71 @@ public final class SessionStore {
             sessions = sorted
         }
         lastRefresh = Date()
+        resolveDetached()
+    }
+
+    /// 刷新「哪些会话已经没终端连着」。
+    ///
+    /// 跟着 refresh 走而不是等界面展开：这个标记决定项目列表上那颗点的颜色，
+    /// 而项目列表在主窗口一打开就在看着 —— 等展开才算的话，用户看到的
+    /// 第一眼仍然是错的。
+    ///
+    /// 要跑两个 tmux 子进程，所以 5 秒节流。refresh 最快 1 秒一轮，
+    /// 不节流就是每秒 fork 两次。
+    private func resolveDetached() {
+        if DemoFixtures.isEnabled { return }
+        guard !resolvingDetached else { return }
+        guard Date().timeIntervalSince(lastDetachedResolve) >= 5 else { return }
+
+        let snapshot = sessions
+        guard !snapshot.isEmpty else {
+            if !detachedSessionIds.isEmpty { detachedSessionIds = [] }
+            return
+        }
+        resolvingDetached = true
+
+        Task.detached(priority: .utility) { [weak self] in
+            let probe = TmuxProbe()
+            let ids = Self.detachedIds(
+                sessions: snapshot,
+                panes: probe.listPanes(),
+                attached: probe.attachedSessionNames(),
+                tree: ProcessTree.snapshot()
+            )
+            await MainActor.run {
+                guard let self else { return }
+                if self.detachedSessionIds != ids { self.detachedSessionIds = ids }
+                self.lastDetachedResolve = Date()
+                self.resolvingDetached = false
+            }
+        }
+    }
+
+    /// 纯计算：哪些会话所在的 tmux 会话没有客户端连着。
+    ///
+    /// 绑不到 pane 的会话**不算 detached** —— 那是「根本不在 tmux 里」
+    /// （VS Code 扩展、直接开的终端、后台任务），它们有没有终端连着这里
+    /// 判断不了，硬报成 detached 就是拿"不知道"当结论。
+    nonisolated static func detachedIds(
+        sessions: [AgentSession],
+        panes: [TmuxPane],
+        attached: Set<String>,
+        tree: ProcessTree
+    ) -> Set<String> {
+        guard !sessions.isEmpty, !panes.isEmpty else { return [] }
+
+        let bound = TmuxProbe().bindPanes(
+            to: Set(sessions.map(\.pid)), tree: tree, panes: panes
+        )
+        let sessionIdByPid = Dictionary(
+            sessions.map { ($0.pid, $0.sessionId) }, uniquingKeysWith: { a, _ in a }
+        )
+
+        var result: Set<String> = []
+        for (pid, pane) in bound where !attached.contains(pane.sessionName) {
+            if let sessionId = sessionIdByPid[pid] { result.insert(sessionId) }
+        }
+        return result
     }
 
     /// 观测 busy → idle 的跃迁，记下这一轮活干了多久。
@@ -253,14 +332,20 @@ public final class SessionStore {
         }
 
         let pids = Set(sessions.map(\.pid))
-        let panes = TmuxProbe().bindPanes(to: pids, tree: tree)
+        let probe = TmuxProbe()
+        let panes = probe.bindPanes(to: pids, tree: tree)
         if !panes.isEmpty {
+            let attached = probe.attachedSessionNames()
             let sessionIdByPid = Dictionary(
                 sessions.map { ($0.pid, $0.sessionId) }, uniquingKeysWith: { a, _ in a }
             )
             for (pid, pane) in panes {
                 guard let sessionId = sessionIdByPid[pid] else { continue }
-                let tmuxLabel = "tmux · \(pane.sessionName):\(pane.windowName)"
+                // 没客户端连着的必须说出来。「tmux · hub:acme-erp」读起来像
+                // 「去那个 tab 就能找到它」，可那个 tab 已经被关掉了 ——
+                // 用户照着找会扑空，然后怀疑整个界面。
+                let suffix = attached.contains(pane.sessionName) ? "" : "（终端已关，仍在后台跑）"
+                let tmuxLabel = "tmux · \(pane.sessionName):\(pane.windowName)\(suffix)"
                 // iTerm 的定位更精确（能点到具体 tab），tmux 信息作为补充拼在后面。
                 labels[sessionId] = labels[sessionId].map { "\($0)  ·  \(tmuxLabel)" }
                     ?? tmuxLabel
