@@ -32,7 +32,7 @@ public final class HubSocketServer: @unchecked Sendable {
     public func start() throws {
         // 客户端可能在我们回写决策之前就关掉连接（不等应答的 hook、
         // 被 Ctrl-C 掉的 hubctl、旧版二进制）。不忽略 SIGPIPE 的话，
-        // 那一次 write 会**直接杀掉 Claude Hub** —— 不是报错，是进程没了。
+        // 那一次 write 会**直接杀掉 Vibe Foreman** —— 不是报错，是进程没了。
         UnixSocket.ignoreSIGPIPEProcessWide()
 
         let fd = try UnixSocket.listen(at: path)
@@ -56,7 +56,7 @@ public final class HubSocketServer: @unchecked Sendable {
         let clientFd = accept(listenFd, nil, nil)
         guard clientFd >= 0 else { return }
         // 客户端可能在我们回写之前就关掉连接（不等应答的 hook、被 Ctrl-C 掉的
-        // hubctl）。不关掉 SIGPIPE 的话那一次 write 会**直接杀掉 Claude Hub**。
+        // hubctl）。不关掉 SIGPIPE 的话那一次 write 会**直接杀掉 Vibe Foreman**。
         UnixSocket.suppressSIGPIPE(fd: clientFd)
 
         workQueue.async { [handler] in

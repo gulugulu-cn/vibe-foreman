@@ -142,7 +142,7 @@ enum UnixSocket {
     ///
     /// 这不是理论风险，是实测撞到的：Stop 改成需要应答之后，服务端会给 stop
     /// 回写决策；而不等应答的客户端（旧版 hubctl、被 Ctrl-C 掉的 hook）
-    /// 早就把连接关了。于是每一次这样的收工都会**杀掉 Claude Hub**。
+    /// 早就把连接关了。于是每一次这样的收工都会**杀掉 Vibe Foreman**。
     /// 测试套件是直接崩在 signal 13 上才暴露的。
     ///
     /// 用 per-socket 的 `SO_NOSIGPIPE` 而不是全局 `signal(SIGPIPE, SIG_IGN)`：

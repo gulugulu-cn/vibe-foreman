@@ -14,7 +14,7 @@ import HubProjects
 ///
 /// 用法：
 ///
-///     HUB_DEMO=1 HUB_ISLAND_STATE=hover "/Applications/Claude Hub.app/Contents/MacOS/ClaudeHub"
+///     HUB_DEMO=1 HUB_ISLAND_STATE=hover "/Applications/Vibe Foreman.app/Contents/MacOS/ClaudeHub"
 ///
 /// 实现上是往临时目录写一批 `sessions/<PID>.json` 再让 reader 指过去，
 /// 而不是在 store 里塞假数据 —— 这样**走的是和生产完全一样的解析路径**，

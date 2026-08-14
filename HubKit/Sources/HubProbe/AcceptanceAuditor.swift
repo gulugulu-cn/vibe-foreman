@@ -202,9 +202,9 @@ public actor AcceptanceAuditor {
         \(summary)
         </改动概览>
 
-        <Claude Hub 直接观测到的被改文件>
+        <Vibe Foreman 直接观测到的被改文件>
         \(touchedBlock)
-        </Claude Hub 直接观测到的被改文件>
+        </Vibe Foreman 直接观测到的被改文件>
 
         <代码改动>
         \(patch)

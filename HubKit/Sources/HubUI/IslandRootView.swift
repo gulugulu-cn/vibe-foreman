@@ -946,7 +946,7 @@ struct ExpandedContent: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text("Claude Hub")
+            Text("Vibe Foreman")
                 .font(IslandTheme.label(13, .semibold))
                 .foregroundStyle(.white)
             Text("\(store.sessions.count) 会话")

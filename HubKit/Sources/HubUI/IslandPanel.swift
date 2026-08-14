@@ -4,7 +4,7 @@ import SwiftUI
 /// 承载灵动岛的窗口。
 ///
 /// 几个设置都不是可选项：
-/// - `.borderless` + `.nonactivatingPanel`：点岛不该把 Claude Hub 变成前台 app，
+/// - `.borderless` + `.nonactivatingPanel`：点岛不该把 Vibe Foreman 变成前台 app，
 ///   否则用户点一下就丢了当前 app 的焦点。
 /// - `level = .statusBar`（25）：压过 `.mainMenu`（24），这样岛能盖在菜单栏之上。
 /// - `.fullScreenAuxiliary`：别的 app 全屏时岛依然可见 —— 你在全屏 IDE 里写代码时

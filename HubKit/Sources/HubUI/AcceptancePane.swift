@@ -108,7 +108,7 @@ struct AcceptancePane: View {
                 ContentUnavailableView(
                     currentPath.map { "\(label(for: $0)) 还没有清单" } ?? "还没有项目",
                     systemImage: "checklist",
-                    description: Text("在下面手动加一条，或等 Claude Hub 从你的需求里自动拆出来")
+                    description: Text("在下面手动加一条，或等 Vibe Foreman 从你的需求里自动拆出来")
                 )
                 .frame(maxHeight: .infinity)
             } else {
@@ -356,7 +356,7 @@ struct AcceptancePane: View {
         let lines = pending.prefix(8).map { "- \($0.text)" }.joined(separator: "\n")
         let more = pending.count > 8 ? "\n（另有 \(pending.count - 8) 项）" : ""
         let text = """
-        【Claude Hub】你自己列的 todo 里这几项还没做完，逐条确认一下现在的状态：
+        【Vibe Foreman】你自己列的 todo 里这几项还没做完，逐条确认一下现在的状态：
         \(lines)\(more)
         """
         let reply = self.reply

@@ -6,7 +6,7 @@ import HubProjects
 import HubUI
 import SwiftUI
 
-// Claude Hub —— 本地 AI 编程 agent 的调度中心。
+// Vibe Foreman —— 本地 AI 编程 agent 的调度中心。
 //
 // 这个 target 刻意做得很薄：只负责启动 NSApplication、装配灵动岛和主窗口、
 // 挂托盘图标。所有逻辑都在 HubKit 的各个库里，那些库可以 `swift test`，这里不行。
@@ -266,7 +266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(
             systemSymbolName: "circle.hexagongrid.fill",
-            accessibilityDescription: "Claude Hub"
+            accessibilityDescription: "Vibe Foreman"
         )
 
         let menu = NSMenu()
@@ -282,7 +282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ).target = self
         menu.addItem(.separator())
         menu.addItem(
-            withTitle: "退出 Claude Hub", action: #selector(quit), keyEquivalent: "q"
+            withTitle: "退出 Vibe Foreman", action: #selector(quit), keyEquivalent: "q"
         ).target = self
         item.menu = menu
         statusItem = item
@@ -337,7 +337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "Claude Hub"
+        window.title = "Vibe Foreman"
         window.titlebarAppearsTransparent = true
         window.contentView = NSHostingView(rootView: root)
         window.center()

@@ -200,7 +200,7 @@ public struct HookDecision: Codable, Sendable {
             "hookSpecificOutput": [
                 "hookEventName": "PreToolUse",
                 "permissionDecision": verdict.rawValue,
-                "permissionDecisionReason": reason ?? "被 Claude Hub 拦截",
+                "permissionDecisionReason": reason ?? "被 Vibe Foreman 拦截",
             ],
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: output) else { return nil }

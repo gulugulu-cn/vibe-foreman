@@ -921,14 +921,14 @@ struct SettingsPane: View {
                 .font(.system(size: 14, weight: .semibold))
 
             Text("""
-            关掉时 Claude Hub 一条命令都不会执行。打开后也仍有两道限制：\
+            关掉时 Vibe Foreman 一条命令都不会执行。打开后也仍有两道限制：\
             只放行构建/测试类命令（`swift test`、`npm run`、`bash scripts/*` 等），\
             含 shell 元字符的一律拒绝；而且**每条命令首次执行前要你在验收页点「允许」**。
             """)
             .font(.system(size: 11))
             .foregroundStyle(.secondary)
 
-            Text("这是 Claude Hub 唯一会在你机器上执行命令的功能。")
+            Text("这是 Vibe Foreman 唯一会在你机器上执行命令的功能。")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(
                     verifierSettings.enabled ? IslandTheme.waiting : Color.secondary.opacity(0.6)
@@ -974,7 +974,7 @@ struct SettingsPane: View {
                 }
             }
 
-            Text("计数从 Claude Hub 启动时开始。刚装完 hook 的话，新开一个会话才会亮。")
+            Text("计数从 Vibe Foreman 启动时开始。刚装完 hook 的话，新开一个会话才会亮。")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
                 .padding(.top, 2)

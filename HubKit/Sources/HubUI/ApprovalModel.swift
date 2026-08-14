@@ -171,7 +171,7 @@ public final class ApprovalCoordinator {
             guard !Task.isCancelled else { return }
             await self?.resolve(
                 id: request.id,
-                decision: HookDecision(verdict: .deny, reason: "Claude Hub：60 秒未响应，已自动拒绝"),
+                decision: HookDecision(verdict: .deny, reason: "Vibe Foreman：60 秒未响应，已自动拒绝"),
                 verdictLabel: "timeout"
             )
         }
@@ -195,7 +195,7 @@ public final class ApprovalCoordinator {
     public func deny(_ request: ApprovalRequest) {
         resolve(
             id: request.id,
-            decision: HookDecision(verdict: .deny, reason: "用户在 Claude Hub 上拒绝了这次操作"),
+            decision: HookDecision(verdict: .deny, reason: "用户在 Vibe Foreman 上拒绝了这次操作"),
             verdictLabel: "deny"
         )
     }

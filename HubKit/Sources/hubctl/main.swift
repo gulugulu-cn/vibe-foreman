@@ -189,7 +189,7 @@ private func runHook(_ name: String) -> Int32 {
         // 它认为这次操作值得拦截，只是决策环节出了问题。这种情况必须拒绝 ——
         // 拒绝可恢复（Claude 会告诉用户并可重试），放行不可逆。
         emitDecision(
-            HookDecision(verdict: .deny, reason: "Claude Hub 未能完成审批，已保守拒绝")
+            HookDecision(verdict: .deny, reason: "Vibe Foreman 未能完成审批，已保守拒绝")
         )
 
     case .acknowledged:
@@ -205,10 +205,10 @@ private func runDoctor() -> Int32 {
     print("socket 文件存在：\(FileManager.default.fileExists(atPath: path) ? "是" : "否")")
 
     if HubSocketClient.isHubRunning() {
-        print("连接测试：✓ Claude Hub 正在运行")
+        print("连接测试：✓ Vibe Foreman 正在运行")
         return 0
     }
-    print("连接测试：✗ 连不上（Claude Hub 没运行，hook 会全部放行）")
+    print("连接测试：✗ 连不上（Vibe Foreman 没运行，hook 会全部放行）")
     return 1
 }
 

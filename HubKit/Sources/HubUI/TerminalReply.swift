@@ -311,7 +311,7 @@ public struct TerminalReply {
     // MARK: - 留痕
 
     /// 护栏⑤。和审批日志放在一起 —— 两者是同一类东西：
-    /// "Claude Hub 替我做了什么不可逆的事"。
+    /// "Vibe Foreman 替我做了什么不可逆的事"。
     nonisolated static func log(text: String, sessionId: String, target: String) {
         HubLog.jump.notice(
             """

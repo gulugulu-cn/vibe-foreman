@@ -408,7 +408,7 @@ public final class AcceptanceStore {
         }
 
         return """
-        【Claude Hub 验收守望】以下要点来自**用户的原始需求和已批准的计划**，\
+        【Vibe Foreman 验收守望】以下要点来自**用户的原始需求和已批准的计划**，\
         不是你自己列的 todo。逐条核对，给结论和证据。
 
         \(lines.joined(separator: "\n"))

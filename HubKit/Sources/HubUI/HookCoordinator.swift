@@ -630,7 +630,7 @@ public final class HookCoordinator {
         // 用户决策超时长，但比 hubctl 的读超时短。
         if semaphore.wait(timeout: .now() + HookTimeouts.serverBridge) == .timedOut {
             HubLog.ipc.error("审批桥接超时，按拒绝处理")
-            return HookDecision(verdict: .deny, reason: "Claude Hub 审批超时")
+            return HookDecision(verdict: .deny, reason: "Vibe Foreman 审批超时")
         }
         HubLog.ipc.notice("用户决策：\(result.verdict.rawValue, privacy: .public)")
         return result

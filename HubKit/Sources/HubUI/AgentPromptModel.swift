@@ -82,7 +82,7 @@ public final class AgentPromptCoordinator {
             id: request.id,
             decision: HookDecision(
                 verdict: .deny,
-                reason: "用户已在 Claude Hub 上选择：\(option.label)。请按这个选择继续，不要重复提问。"
+                reason: "用户已在 Vibe Foreman 上选择：\(option.label)。请按这个选择继续，不要重复提问。"
             )
         )
     }
@@ -94,7 +94,7 @@ public final class AgentPromptCoordinator {
             id: request.id,
             decision: HookDecision(
                 verdict: .deny,
-                reason: "用户已在 Claude Hub 上作答 —— \(joined)。请按这些选择继续，不要重复提问。"
+                reason: "用户已在 Vibe Foreman 上作答 —— \(joined)。请按这些选择继续，不要重复提问。"
             )
         )
     }
@@ -113,7 +113,7 @@ public final class AgentPromptCoordinator {
             id: request.id,
             decision: HookDecision(
                 verdict: .deny,
-                reason: "用户在 Claude Hub 上驳回了这份计划，请调整后重新提出。"
+                reason: "用户在 Vibe Foreman 上驳回了这份计划，请调整后重新提出。"
             )
         )
     }

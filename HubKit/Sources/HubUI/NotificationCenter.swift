@@ -92,7 +92,7 @@ public final class HubNotificationCenter: NSObject, UNUserNotificationCenterDele
 
     /// app 在前台时也要显示横幅。
     ///
-    /// Claude Hub 是 `.accessory` 类型，本来就不"在前台"，但用户点开主窗口时
+    /// Vibe Foreman 是 `.accessory` 类型，本来就不"在前台"，但用户点开主窗口时
     /// 它会变成活跃 app，这时通知照样得显示 —— 用户要的是知道别的会话怎么样了。
     public nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
