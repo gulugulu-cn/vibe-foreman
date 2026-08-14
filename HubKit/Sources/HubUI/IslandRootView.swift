@@ -1022,9 +1022,11 @@ struct ProjectListContent: View {
                                 resumable: closedSessions.latest(
                                     forProject: project.expandedPath
                                 ),
+                                isMissing: projects.isMissing(project),
                                 onOpen: { open(project) },
                                 onLaunch: { onLaunch(project, $0) },
-                                onTogglePin: { projects.togglePin(project) }
+                                onTogglePin: { projects.togglePin(project) },
+                                onRemove: { projects.remove([project]) }
                             )
                         }
                     }
@@ -1083,9 +1085,13 @@ struct ProjectRowView: View {
     /// 上一个被「关窗即结束」收掉、且接得回来的会话。
     /// 有它就说明这个项目"关掉了但没干完"，菜单第一项应该是接回去而不是重开。
     var resumable: ClosedSession?
+    /// 目录已经不在了。岛上的行不显示路径，所以这一档**必须有视觉标记** ——
+    /// 否则一个指向已删除目录的项目看起来和正常的一模一样。
+    var isMissing: Bool = false
     let onOpen: () -> Void
     let onLaunch: (LaunchMode) -> Void
     let onTogglePin: () -> Void
+    var onRemove: (() -> Void)?
 
     @State private var isHovered = false
 
@@ -1097,11 +1103,15 @@ struct ProjectRowView: View {
     var body: some View {
         rowBody
             .contentShape(Rectangle())
+            // 右键盖在整行上。只认右键和 ctrl+左键，左键照旧穿透下去 ——
+            // 见 RightClickCatcher 里 hitTest 的说明。
+            .overlay(RightClickCatcher { presentLaunchMenu() })
             .onTapGesture {
                 // 有会话：跳过去。无会话：在鼠标位置弹原生启动菜单 ——
                 // SwiftUI Menu 的两种整行方案都在 macOS 上翻过车
                 // （label 被压扁 / 透明盖层收不到点击），见 RowMenu 注释。
-                if running.isEmpty {
+                // 目录没了就别去开 —— tmux 会静默开在家目录。弹菜单让人移除。
+                if running.isEmpty || isMissing {
                     presentLaunchMenu()
                 } else {
                     onOpen()
@@ -1111,24 +1121,15 @@ struct ProjectRowView: View {
             .help(project.expandedPath)
     }
 
-    /// 启动菜单：LaunchMode 全集 + 置顶。整行点击和 "..." 共用。
+    /// 启动菜单。整行点击（无会话时）、右键、"..." 三个入口共用，
+    /// 内容也和主窗口共用同一份（`ProjectMenu`）。
     private func presentLaunchMenu() {
-        var items: [RowMenu.Item?] = []
-        // 「接着上次」排第一，且只在真的有东西可接时出现。
-        // 关掉窗口后回来的人想要的是接着往下走，不是从空白开一个新的 ——
-        // 把它埋在「Claude Code」下面等于让用户每次都重开一个。
-        if let resumable {
-            items.append(RowMenu.Item(
-                "接着上次（\(RelativeTime.short(from: resumable.endedAt))前结束）"
-            ) { onLaunch(.resumeSession) })
-            items.append(nil)
-        }
-        items += LaunchMode.allCases
-            .filter { $0 != .resumeSession }
-            .map { mode in RowMenu.Item(mode.label) { onLaunch(mode) } }
-        items.append(nil)
-        items.append(RowMenu.Item(isPinned ? "取消置顶" : "置顶", action: onTogglePin))
-        RowMenu.present(items)
+        RowMenu.present(
+            ProjectMenu.items(
+                isPinned: isPinned, resumable: resumable, isMissing: isMissing,
+                onLaunch: onLaunch, onTogglePin: onTogglePin, onRemove: onRemove
+            )
+        )
     }
 
     private var rowBody: some View {
@@ -1162,7 +1163,11 @@ struct ProjectRowView: View {
                             .foregroundStyle(.white.opacity(0.5))
                             .rotationEffect(.degrees(45))
                     }
-                    if running.count > 0 {
+                    if isMissing {
+                        Text("目录已不存在")
+                            .font(IslandTheme.label(10, .medium))
+                            .foregroundStyle(IslandTheme.waiting)
+                    } else if running.count > 0 {
                         Text("\(running.count) 个会话")
                             .font(IslandTheme.label(10, .medium))
                             .foregroundStyle(status.map(IslandTheme.color(for:)) ?? .white)

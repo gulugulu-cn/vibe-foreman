@@ -264,6 +264,42 @@ private func describe(_ reason: StallReason) -> String {
     }
 }
 
+/// 走和 app 完全相同的那条派发路：ProjectStore → Project.expandedPath →
+/// TerminalDispatch.open。
+///
+/// 加这个是为了把「界面把哪个项目传下来了」和「派发本身对不对」分开 ——
+/// 实机上撞到过右键开出来的 claude 落在家目录，只看现象没法区分这两半，
+/// 而没有 UI 的复现手段时只能靠读代码猜，猜了三轮没猜中。
+@MainActor
+func runLaunch(name: String, mode raw: String) {
+    let store = ProjectStore()
+    store.load()
+
+    let needle = name.lowercased()
+    guard let project = store.projects.first(where: {
+        $0.name.lowercased() == needle
+            || $0.aliases.contains { $0.lowercased() == needle }
+    }) else {
+        print("找不到项目：\(name)（共 \(store.projects.count) 个）")
+        exit(1)
+    }
+
+    guard let mode = LaunchMode(rawValue: raw) else {
+        print("未知 mode：\(raw)。可选：\(LaunchMode.allCases.map(\.rawValue).joined(separator: ", "))")
+        exit(1)
+    }
+
+    print("项目 \(project.name)")
+    print("  yaml 原文 path：\(project.path.isEmpty ? "<空>" : project.path)")
+    print("  expandedPath ：\(project.expandedPath.isEmpty ? "<空>" : project.expandedPath)")
+    print("  mode         ：\(mode.rawValue)")
+
+    let ok = TerminalDispatch().open(
+        project: project.name, path: project.expandedPath, mode: mode
+    )
+    print(ok ? "派发成功" : "派发失败（详见 launch.log）")
+}
+
 let args = Array(CommandLine.arguments.dropFirst())
 switch args.first {
 case "list", nil:
@@ -278,7 +314,16 @@ case "jump":
     runJump(args[1])
 case "usage":
     runUsage(args.count >= 2 ? args[1] : nil)
+case "launch":
+    guard args.count >= 2 else {
+        print("用法：hubprobe launch <项目名> [claude|terminal|finder|vscode|resumeLast]")
+        exit(1)
+    }
+    runLaunch(name: args[1], mode: args.count >= 3 ? args[2] : "finder")
 default:
-    print("用法：hubprobe [list | jump <序号或 sessionId> | usage [7|30|all] | stall [--ai]]")
+    print("""
+    用法：hubprobe [list | jump <序号或 sessionId> | usage [7|30|all] \
+    | stall [--ai] | launch <项目名> [mode]]
+    """)
     exit(1)
 }

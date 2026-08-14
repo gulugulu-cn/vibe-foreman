@@ -120,6 +120,7 @@ public final class ProjectStore {
             sourceURL = url
             projects = outcome.projects
             rebuildPathIndex()
+            refreshMissing()
             refreshGit()
             return
         }
@@ -135,6 +136,87 @@ public final class ProjectStore {
             loadDiagnostic = "找不到 projects.yaml"
         }
         rebuildPathIndex()
+    }
+
+    // MARK: - 失效项目
+
+    /// 目录已经不在了的项目（key 是 `Project.id`）。
+    ///
+    /// ## 为什么必须显式标出来
+    ///
+    /// tmux 对不存在的 `-c` 目录**返回 0 并静默回落到家目录**，`open` 则
+    /// 什么都不做。所以一条指向已删除目录的记录，表现出来是
+    /// 「Finder 没反应」+「Claude 开到家目录」——看起来像界面坏了。
+    /// 实机上 40 条里有 6 条是这样的，而列表上一点痕迹都没有。
+    public private(set) var missingPaths: Set<String> = []
+
+    public func isMissing(_ project: Project) -> Bool { missingPaths.contains(project.id) }
+
+    /// 重新检查每个项目的目录还在不在。
+    ///
+    /// 跟着 git 轮询走：40 次 stat 是微秒级的，而"目录被删了"这件事
+    /// 本来就该在下一次刷新时就看见，不该等重启。
+    private func refreshMissing() {
+        var missing: Set<String> = []
+        for project in projects {
+            var isDirectory: ObjCBool = false
+            let exists = FileManager.default.fileExists(
+                atPath: project.expandedPath, isDirectory: &isDirectory
+            )
+            if !exists || !isDirectory.boolValue { missing.insert(project.id) }
+        }
+        if missing != missingPaths { missingPaths = missing }
+    }
+
+    // MARK: - 增删
+
+    /// 把项目从 yaml 里删掉。
+    ///
+    /// **只动列表，不碰磁盘上的目录。** 用户要清理的是这份清单里的脏数据，
+    /// 不是他的代码 —— 一个"移除"按钮顺手删了工作区是不可接受的。
+    @discardableResult
+    public func remove(_ projects: [Project]) -> Bool {
+        guard !projects.isEmpty, let url = sourceURL,
+              let text = try? String(contentsOf: url, encoding: .utf8)
+        else { return false }
+
+        let names = Set(projects.map(\.name))
+        let updated = ProjectYAML.removing(names: names, from: text)
+        guard updated != text else { return false }
+        guard (try? updated.write(to: url, atomically: true, encoding: .utf8)) != nil
+        else { return false }
+
+        load()
+        return true
+    }
+
+    /// 一键清掉全部失效项目。
+    public var missingProjects: [Project] { projects.filter { missingPaths.contains($0.id) } }
+
+    /// 手工把一个已有目录登记成项目。
+    ///
+    /// **扫描只认有 `.git` 的目录**，所以 monorepo 里的子目录、还没 git init
+    /// 的目录永远扫不进来 —— 实机上 40 条里有 7 条属于这种，只能手写 yaml。
+    /// 这是"能加载进去"这件事真正缺的那个入口。
+    @discardableResult
+    public func addExisting(path rawPath: String, name rawName: String? = nil) -> Bool {
+        let path = normalize(rawPath)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else { return false }
+
+        // 已经登记过就别加第二遍 —— 重名条目会让"删除"变得没法预测。
+        guard !projects.contains(where: { normalize($0.expandedPath) == path }) else {
+            return false
+        }
+        guard let url = sourceURL ?? candidateURLs.first else { return false }
+
+        let trimmed = rawName?.trimmingCharacters(in: .whitespaces) ?? ""
+        let name = trimmed.isEmpty ? (path as NSString).lastPathComponent : trimmed
+        Self.append(entries: [(name, path)], to: url)
+        load()
+        return true
     }
 
     private func rebuildPathIndex() {
@@ -249,13 +331,17 @@ public final class ProjectStore {
     /// 写条目，产出的 YAML 变成"空数组标记后面跟着 117 条内容" ——
     /// 解析器看到 `[]` 就认定项目段是空的，全部忽略。
     nonisolated static func append(paths: [String], to url: URL) {
-        guard var text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        append(entries: paths.map { (($0 as NSString).lastPathComponent, $0) }, to: url)
+    }
+
+    nonisolated static func append(entries: [(name: String, path: String)], to url: URL) {
+        guard !entries.isEmpty,
+              var text = try? String(contentsOf: url, encoding: .utf8) else { return }
 
         text = normalizeProjectsKey(in: text)
         if !text.hasSuffix("\n") { text += "\n" }
-        for path in paths {
-            let name = (path as NSString).lastPathComponent
-            text += "  - name: \(name)\n    path: \(path)\n"
+        for entry in entries {
+            text += "  - name: \(entry.name)\n    path: \(entry.path)\n"
         }
         try? text.write(to: url, atomically: true, encoding: .utf8)
     }

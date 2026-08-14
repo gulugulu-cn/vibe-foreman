@@ -121,6 +121,46 @@ public enum ProjectYAML {
         analyze(text).projects
     }
 
+    /// 从 yaml 原文里删掉若干条项目，其余**一字不动**。
+    ///
+    /// ## 为什么是文本手术而不是"解析完重写"
+    ///
+    /// 重写会把用户手写的注释、别名、描述、分段空行全部抹平。这份文件是给人
+    /// 改的 —— `AcceptanceStore` 和 `SessionWatchdog` 都因为"内存状态直接盖盘"
+    /// 弄丢过手改内容（见它们的注释），同一个错不能犯第三次。
+    ///
+    /// ## 删除的边界
+    ///
+    /// 从 `- name: X` 那一行开始，一直删到**下一个同级列表项**或**下一个顶层键**
+    /// 为止。中间的 path / aliases / description / 注释 / 空行都属于这一条。
+    /// 不这么切的话会留下几行没主的 `path:`，而那些孤儿行会被解析器
+    /// 挂到**前一条**项目上 —— 删一条把另一条也弄坏了，且完全静默。
+    public static func removing(names: Set<String>, from text: String) -> String {
+        guard !names.isEmpty else { return text }
+
+        let lines = text.components(separatedBy: "\n")
+        var result: [String] = []
+        var dropping = false
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let isTopLevel = !line.hasPrefix(" ") && !line.hasPrefix("\t") && !trimmed.isEmpty
+            let isEntry = trimmed.hasPrefix("- ")
+
+            if isTopLevel {
+                // 顶层键（`scan_dirs:` 之类）一定是新段落的开始。
+                dropping = false
+            } else if isEntry {
+                // 每遇到一个列表项就重新判定 —— 上一条删没删完到这里为止。
+                let rest = String(trimmed.dropFirst(2))
+                dropping = value(of: "name", in: rest).map(names.contains) ?? false
+            }
+
+            if !dropping { result.append(line) }
+        }
+        return result.joined(separator: "\n")
+    }
+
     public static func analyze(_ text: String) -> Outcome {
         var projects: [Project] = []
         var entryMarkers = 0

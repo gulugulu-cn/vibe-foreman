@@ -144,6 +144,36 @@ public struct TerminalDispatch: Sendable {
         mode: LaunchMode,
         sessionId: String? = nil
     ) -> Bool {
+        // **每一次派发都记一笔。**
+        //
+        // 「点了没反应」和「开到了别的目录」这两类故障，在外面看起来都只是
+        // "结果不对"，而中间传了什么完全不可见 —— `log show` 对这个 app 是瞎的
+        //（ad-hoc 签名，NOTES.md 记过），os.Logger 打了也看不到。
+        // 没有这份记录时我只能靠读代码猜 path 怎么会变空，猜了三轮没猜中。
+        Self.trace("open mode=\(mode.rawValue) name=\(name) path=\(path.isEmpty ? "<空>" : path)")
+
+        // **目录不存在必须当场拦下，不能让它往下走。**
+        //
+        // tmux 对不存在的 `-c` 目录**返回 0 并静默回落到家目录** ——
+        // 实测 `tmux new-session -c /不存在的路径` exit=0，
+        // `pane_current_path` 变成 `/Users/dev`。`open /不存在` 则什么都不做。
+        // 两者都不报错。
+        //
+        // 于是 projects.yaml 里 6 条指向已删除目录的记录，表现成
+        // 「Finder 那些全没用」+「Claude 开到家目录」，看起来像右键菜单坏了，
+        // 而真正坏的是数据。我为此猜了三轮代码都没猜中 ——
+        // **一个静默回落的 API 会把数据问题伪装成功能问题。**
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+        guard !path.trimmingCharacters(in: .whitespaces).isEmpty else {
+            Self.trace("拒绝：\(name) 的路径是空的（检查 projects.yaml）")
+            return false
+        }
+        guard exists, isDirectory.boolValue else {
+            Self.trace("拒绝：\(name) 的目录不存在 —— \(path)")
+            return false
+        }
+
         switch mode {
         case .finder:
             return Shell.run("/usr/bin/open", [path], timeout: 5).succeeded
@@ -169,6 +199,29 @@ public struct TerminalDispatch: Sendable {
             return addWindow(name: name, path: path, command: inner)
         }
         return createSession(name: name, path: path, command: inner)
+    }
+
+    /// 派发日志。
+    ///
+    /// 写文件而不是 `os.Logger`：本机实测 `log show` 完全看不到这个 app 的输出
+    /// （多半和 ad-hoc 签名有关），同 `SessionWatchdog` 的心跳。
+    /// **一个看不见的仪表比没有仪表更糟** —— 我拿它做过诊断，得出了错误结论。
+    static func trace(_ line: String) {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/claude-hub/launch.log")
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        guard let data = "\(stamp) \(line)\n".data(using: .utf8) else { return }
+
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        if let handle = try? FileHandle(forWritingTo: url) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: url)
+        }
     }
 
     /// 补齐项目的 `.claude/settings.json`（防污染 deny + 全套 hook）。

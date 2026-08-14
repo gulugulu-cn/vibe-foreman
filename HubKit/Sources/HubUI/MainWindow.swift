@@ -394,6 +394,37 @@ struct ProjectsPane: View {
         return store.sessions.filter { $0.cwd == root || $0.cwd.hasPrefix(root + "/") }
     }
 
+    /// 选一个已有目录登记成项目。
+    ///
+    /// **只登记，不创建、不改动目录本身。**「新建」是另一个按钮。
+    private func addExistingDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "添加"
+        panel.message = "选择要加入清单的项目目录（不限于 git 仓库）"
+        panel.directoryURL = URL(
+            fileURLWithPath: NSString(string: "~/Documents/code").expandingTildeInPath
+        )
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls { projects.addExisting(path: url.path) }
+    }
+
+    /// 这一行的菜单内容。▶ 按钮和右键共用。
+    private func menuItems(for project: Project) -> [RowMenu.Item?] {
+        ProjectMenu.items(
+            isPinned: projects.isPinned(project),
+            resumable: runningCount(project) == 0
+                ? closedSessions.latest(forProject: project.expandedPath)
+                : nil,
+            isMissing: projects.isMissing(project),
+            onLaunch: { onLaunch(project, $0) },
+            onTogglePin: { projects.togglePin(project) },
+            onRemove: { projects.remove([project]) }
+        )
+    }
+
     /// 一行的会话说明。
     ///
     /// **全部会话都断开时不能只写「N 个会话」** —— 用户已经把窗口关了，
@@ -431,6 +462,25 @@ struct ProjectsPane: View {
                     Label("扫描", systemImage: "arrow.clockwise")
                 }
                 .disabled(projects.isScanning)
+                // 扫描只认有 .git 的目录 —— monorepo 里的子目录、还没 git init
+                // 的目录永远扫不进来（实机 40 条里有 7 条是这种）。
+                // 这是"能加载进去"真正缺的那个入口。
+                Button {
+                    addExistingDirectory()
+                } label: {
+                    Label("添加目录", systemImage: "folder.badge.plus")
+                }
+                if !projects.missingProjects.isEmpty {
+                    Button(role: .destructive) {
+                        projects.remove(projects.missingProjects)
+                    } label: {
+                        Label(
+                            "清理失效 \(projects.missingProjects.count)",
+                            systemImage: "trash"
+                        )
+                    }
+                    .help("这些项目的目录已经不在了。只从清单里移除，不动磁盘上的任何文件。")
+                }
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
@@ -468,6 +518,12 @@ struct ProjectsPane: View {
                                                 .font(.system(size: 9))
                                                 .foregroundStyle(.secondary)
                                                 .rotationEffect(.degrees(45))
+                                        }
+                                        if projects.isMissing(project) {
+                                            Label("目录已不存在", systemImage:
+                                                    "exclamationmark.triangle.fill")
+                                                .font(.system(size: 10, weight: .medium))
+                                                .foregroundStyle(IslandTheme.waiting)
                                         }
                                         if let summary = Self.sessionSummary(
                                             running: runningCount(project),
@@ -507,6 +563,7 @@ struct ProjectsPane: View {
                                     Text(project.path)
                                         .font(.system(size: 11, design: .monospaced))
                                         .foregroundStyle(.tertiary)
+                                        .strikethrough(projects.isMissing(project))
                                         .lineLimit(1)
                                         .truncationMode(.head)
                                 }
@@ -515,14 +572,15 @@ struct ProjectsPane: View {
                                 GitChip(info: projects.git(for: project))
 
                                 Menu {
-                                    ForEach(LaunchMode.allCases, id: \.self) { mode in
-                                        if mode != .resumeSession {
-                                            Button(mode.label) { onLaunch(project, mode) }
+                                    // 和右键、和岛上那份是同一批菜单项。
+                                    // 各写一遍必然漂移，见 ProjectMenu 的说明。
+                                    let items = menuItems(for: project)
+                                    ForEach(items.indices, id: \.self) { index in
+                                        if let item = items[index] {
+                                            Button(item.title, action: item.action)
+                                        } else {
+                                            Divider()
                                         }
-                                    }
-                                    Divider()
-                                    Button(projects.isPinned(project) ? "取消置顶" : "置顶") {
-                                        projects.togglePin(project)
                                     }
                                 } label: {
                                     Image(systemName: "play.circle")
@@ -530,6 +588,11 @@ struct ProjectsPane: View {
                                 .menuStyle(.borderlessButton)
                                 .fixedSize()
                             }
+                            // 右键整行 = 同一个菜单。每次都得瞄准行尾那个小按钮
+                            // 才能选开法，是这一版之前最鸡肋的地方。
+                            .overlay(RightClickCatcher {
+                                RowMenu.present(menuItems(for: project))
+                            })
                         }
                     }
                 }

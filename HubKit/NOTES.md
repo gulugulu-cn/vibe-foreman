@@ -311,6 +311,51 @@ claude 的父进程是 tmux server，关窗口只是 detach，进程照跑。于
 - **连续两轮才动手**（30 秒）。一轮就杀的话，换窗口、iTerm 重启恢复
   会话这类正常的短暂 detach 都会被当成关掉了。
 
+### tmux 对不存在的 `-c` 目录返回 0，然后悄悄用家目录
+
+```
+$ tmux new-session -d -s t -c /不存在的路径 ; echo $?
+0
+$ tmux list-panes -t t -F '#{pane_current_path}'
+/Users/dev
+```
+
+`new-window -c` 同样如此。`open /不存在的路径` 则静默什么都不做。
+
+**这两个静默回落把一个数据问题彻底伪装成了功能问题。** 实机现象是
+「右键菜单里 Finder / VS Code 全没反应」+「Claude Code 开到 `/Users/dev`」，
+看起来像刚加的右键菜单写坏了。真实原因是 projects.yaml 里 40 条有 6 条
+指向已经被删掉的目录（agentx-agent 那一批）。
+
+我为此连猜三轮代码（"path 传成空字符串了吧"）都没猜中，直到把派发参数
+落盘 + 拿 tmux 实测才定位到。教训有两条：
+
+1. **不报错的 API 要主动查前置条件。** `TerminalDispatch.open` 现在在派发前
+   `fileExists(isDirectory:)`，不通过就拒绝并记日志。
+2. **看不见的东西查不了。** `log show` 对这个 app 是瞎的（ad-hoc 签名，
+   os.Logger 打了看不到），所以派发日志写
+   `~/Library/Application Support/claude-hub/launch.log`。
+   另有 `hubprobe launch <项目名> [mode]` 走完全相同的那条路，
+   用来把「界面传了哪个项目」和「派发本身对不对」分开。
+
+### 扫描只认 `.git`，所以有一整类项目永远进不来
+
+`GitStatus.scanRepositories` 撞到 `.git` 就停止下钻，且只收有 `.git` 的目录。
+于是 monorepo 里的子目录（`demo-iot/{ios,android,server}`）、还没
+git init 的目录（`fetch`、`game`）全都扫不进来 —— 实机 40 条里有 7 条属于
+这一类，只能手写 yaml，而且写进去之后**没有任何界面入口能删掉**。
+
+补的是两头：`ProjectStore.addExisting(path:)`（选任意目录登记，配 NSOpenPanel）
+和 `ProjectStore.remove(_:)`。
+
+删除是**文本手术**（`ProjectYAML.removing(names:from:)`），不是"解析完重写"：
+这份文件是给人手改的，重写会把注释、别名、描述、分段空行全抹平 ——
+`AcceptanceStore` 和 `SessionWatchdog` 都因为"内存状态直接盖盘"弄丢过手改内容。
+
+删除的边界：从 `- name: X` 一直删到**下一个同级列表项或下一个顶层键**。
+只删 name 那一行的话，剩下的 `path:` / `aliases:` 会被解析器挂到**前一条**
+项目上 —— 删一条把另一条也弄坏了，且完全静默。测试钉着这一条。
+
 ## 打包与签名
 
 ### 辅助可执行文件不能放 `Contents/MacOS/`
