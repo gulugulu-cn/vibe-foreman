@@ -1,6 +1,10 @@
-# Vibe Foreman Free
+<p align="center">
+  <img src="docs/icon.png" width="128" alt="Vibe Foreman">
+</p>
 
-把 MacBook 的刘海变成本地 AI 编程 agent 的**工头**。
+<h1 align="center">Vibe Foreman Free</h1>
+
+<p align="center">把 MacBook 的刘海变成本地 AI 编程 agent 的<b>工头</b>。</p>
 
 它不只是让你看见 agent 在干嘛 —— 它盯着它们**有没有真的把活干完**。
 
