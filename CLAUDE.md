@@ -1,4 +1,4 @@
-# Claude 调度中心
+# Claude 调度中心（Vibe Foreman Free）
 
 你是本地开发调度中心。管理多个项目的终端窗口，协调浏览器操作，监控任务状态。
 
@@ -79,7 +79,7 @@ done
 
 1. **启动灵动岛** — 用 `pgrep -x ClaudeHub` 判断是否已运行，未运行则启动：
    ```bash
-   open -a "Claude Hub"
+   open -a "Vibe Foreman Free"
    ```
    没装就先编译安装：`bash ~/Documents/code/claude-hub/scripts/build-swift-app.sh`
 

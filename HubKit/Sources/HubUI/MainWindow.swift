@@ -873,6 +873,8 @@ struct SettingsPane: View {
     @Bindable var reaper: SessionReaper
 
     @State private var hookStatus: String = "检查中…"
+    /// hook 装好了没有。启动时 app 已经自动装过一遍，这里是复查 + 手动修复入口。
+    @State private var hookInstalled: HookInstaller.Outcome = .alreadyCorrect
 
     /// 「关掉终端窗口就结束会话」。
     ///
@@ -1089,6 +1091,39 @@ struct SettingsPane: View {
 
                     Card {
                         VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Hook 安装").font(.system(size: 14, weight: .semibold))
+                                Spacer()
+                                Button("重新检查并修复") { hookInstalled = HookInstaller().install() }
+                                    .font(.system(size: 11))
+                            }
+
+                            // 自动装好之后必须**说出来**。一个默默做完的自动步骤
+                            // 和一个默默失败的自动步骤，在界面上长得一模一样；
+                            // 而后者的表现是"app 开着但一条事件都收不到"。
+                            switch hookInstalled {
+                            case .alreadyCorrect:
+                                Label("9 类 hook 已装好，无需手动操作", systemImage: "checkmark.seal")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(IslandTheme.shell)
+                            case .installed(let count):
+                                Label("已自动装好 \(count) 类 hook", systemImage: "wand.and.stars")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(IslandTheme.busy)
+                            case .failed(let reason):
+                                Label(reason, systemImage: "exclamationmark.triangle.fill")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(IslandTheme.waiting)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            Text("装到 ~/.claude/settings.json，只动 Hub 自己的那几条，你手写的 hook 不受影响。")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.tertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            Divider().padding(.vertical, 2)
+
                             Text("Hook 连接").font(.system(size: 14, weight: .semibold))
                             Text(hookStatus)
                                 .font(.system(size: 12, design: .monospaced))
@@ -1132,6 +1167,11 @@ struct SettingsPane: View {
         }
         .onAppear {
             hookStatus = "✓ socket 正在监听，hook 事件会实时送达"
+            // 复查而不是重装：进设置页只是想看看状态，不该顺手改文件。
+            let installer = HookInstaller()
+            hookInstalled = installer.isHealthy()
+                ? .alreadyCorrect
+                : .failed("有 hook 没装上或指向了旧的 hubctl —— 点右上角修复")
         }
     }
 }

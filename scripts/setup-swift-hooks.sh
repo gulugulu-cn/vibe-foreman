@@ -37,6 +37,7 @@ fail() { printf '\033[31m✗\033[0m %s\n' "$1" >&2; exit 1; }
 
 SOURCE=""
 for candidate in \
+  "/Applications/Vibe Foreman Free.app/Contents/Helpers/hubctl" \
   "/Applications/Claude Hub.app/Contents/Helpers/hubctl" \
   "$HUB_DIR/HubKit/.build/release/hubctl" \
   "$HUB_DIR/HubKit/.build/debug/hubctl"; do

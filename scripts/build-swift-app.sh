@@ -15,7 +15,7 @@ set -euo pipefail
 
 HUB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PKG_DIR="${HUB_DIR}/HubKit"
-APP_NAME="Claude Hub"
+APP_NAME="Vibe Foreman Free"
 BUNDLE_ID="dev.hengjun.claude-hub"
 CERT_NAME="Claude Hub Dev"
 CONFIG="${1:-release}"
@@ -90,7 +90,7 @@ cat > "${APP_PATH}/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key>        <string>ClaudeHub</string>
     <key>CFBundleIdentifier</key>        <string>$BUNDLE_ID</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>2.4.0</string>
+    <key>CFBundleShortVersionString</key><string>2.5.0</string>
     <key>CFBundleVersion</key>           <string>2</string>
     <key>CFBundleIconFile</key>          <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>    <string>26.0</string>
@@ -98,7 +98,7 @@ cat > "${APP_PATH}/Contents/Info.plist" <<PLIST
     <key>LSUIElement</key>               <true/>
     <!-- 控制 iTerm 切 tab 需要 Automation 权限，这条是授权弹窗里的说明文案 -->
     <key>NSAppleEventsUsageDescription</key>
-    <string>Claude Hub 需要控制终端来跳转到对应的会话标签页。</string>
+    <string>Vibe Foreman Free 需要控制终端来跳转到对应的会话标签页。</string>
 </dict>
 </plist>
 PLIST
@@ -174,6 +174,10 @@ fi
 #   - 任何 `pgrep -f "Claude Hub.app"` 式的存活判断都会误匹配。
 # 所以：一个 identifier 只允许对应 /Applications 里那一个 bundle。
 INSTALL_PATH="/Applications/${APP_NAME}.app"
+# 改过显示名，旧名字那份必须清掉 —— 留着的话 /Applications 里同时躺着
+# 两个功能一样的 app，而它们共用同一个 bundle id，`open -a` 开哪个全看运气。
+LEGACY_PATH="/Applications/Claude Hub.app"
+[ -d "$LEGACY_PATH" ] && [ "$LEGACY_PATH" != "$INSTALL_PATH" ] && rm -rf "$LEGACY_PATH"
 
 log "安装到 ${INSTALL_PATH}…"
 # 先退掉正在跑的旧实例，否则覆盖正在执行的二进制会得到一个半死不活的进程。

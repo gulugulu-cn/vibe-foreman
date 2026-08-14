@@ -12,7 +12,7 @@ set -euo pipefail
 
 HUB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PKG_DIR="${HUB_DIR}/HubKit"
-APP_NAME="Claude Hub"
+APP_NAME="Vibe Foreman Free"
 BUNDLE_ID="dev.hengjun.claude-hub"
 CERT_NAME="Claude Hub Dev"
 
@@ -109,7 +109,7 @@ cat > "${APP_PATH}/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key>    <string>26.0</string>
     <key>LSUIElement</key>               <true/>
     <key>NSAppleEventsUsageDescription</key>
-    <string>Claude Hub 需要控制终端来跳转到对应的会话标签页。</string>
+    <string>Vibe Foreman Free 需要控制终端来跳转到对应的会话标签页。</string>
     <!-- 打包时的提交号。用户报问题时能直接对上代码。 -->
     <key>HubGitCommit</key>              <string>${COMMIT}${DIRTY}</string>
 </dict>
@@ -150,8 +150,13 @@ mkdir -p "${DMG_STAGE}"
 cp -R "${APP_PATH}" "${DMG_STAGE}/"
 # 拖进去就装：给个 /Applications 的替身。
 ln -s /Applications "${DMG_STAGE}/Applications"
-cp "${HUB_DIR}/scripts/setup-swift-hooks.sh" "${DMG_STAGE}/安装 hook.command" 2>/dev/null || true
-chmod +x "${DMG_STAGE}/安装 hook.command" 2>/dev/null || true
+# hook 现在由 app 首次启动时自己装（HookInstaller），dmg 里不再放那个
+# 「安装 hook.command」—— 它没有任何用户能做的决定，而漏点它的后果是静默的：
+# app 开着、界面正常、一条事件都收不到。
+#
+# 脚本本身留在仓库里，作为「装坏了怎么手工修」的兜底。
+cp "${HUB_DIR}/scripts/setup-swift-hooks.sh" "${DMG_STAGE}/手工修复 hook（通常用不到）.command" 2>/dev/null || true
+chmod +x "${DMG_STAGE}/手工修复 hook（通常用不到）.command" 2>/dev/null || true
 
 hdiutil create -volname "${APP_NAME} ${VERSION}" \
   -srcfolder "${DMG_STAGE}" -ov -format UDZO "${DMG_PATH}" >/dev/null

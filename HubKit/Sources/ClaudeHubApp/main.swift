@@ -50,6 +50,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 关掉终端窗口就结束会话。
     private lazy var reaper = SessionReaper(store: store, closed: closedSessions)
 
+    /// hook 自动安装的结果。设置页要显示 —— 一个默默失败的自动步骤
+    /// 比要求用户手动跑一遍更糟。
+    private var hookInstall: HookInstaller.Outcome = .alreadyCorrect
+
     private var statusItem: NSStatusItem?
     private var mainWindow: NSWindow?
     private var approvalObserver: Task<Void, Never>?
@@ -71,6 +75,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let verificationEnabled = verifierSettings.enabled
         Task { await verifier.update(configuration: .init(enabled: verificationEnabled)) }
+
+        // 零配置：自己把 hook 装好，不再要求用户去双击「安装 hook.command」。
+        //
+        // 那一步没有任何用户能做的决定，而漏了它的后果是**静默的** ——
+        // app 打开了、界面正常、一条事件都收不到，用户看到的是"装了但没用"。
+        //
+        // 幂等，内容没变一个字节都不写；失败也只是记下来，绝不阻断启动 ——
+        // hook 没装好的 app 仍然能显示会话，而起不来的 app 什么都不是。
+        if !DemoFixtures.isEnabled {
+            hookInstall = HookInstaller().install()
+            switch hookInstall {
+            case .installed(let count):
+                HubLog.app.notice("已自动装好 \(count, privacy: .public) 类 hook")
+            case .failed(let reason):
+                HubLog.app.error("hook 自动安装失败：\(reason, privacy: .public)")
+            case .alreadyCorrect:
+                break
+            }
+        }
 
         projects.load()
         projects.startGitPolling()

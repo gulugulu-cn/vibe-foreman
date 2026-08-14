@@ -1,10 +1,12 @@
-# Claude Hub
+# Vibe Foreman Free
 
-把 MacBook 的刘海变成本地 AI 编程 agent 的控制中心。
+把 MacBook 的刘海变成本地 AI 编程 agent 的**工头**。
+
+它不只是让你看见 agent 在干嘛 —— 它盯着它们**有没有真的把活干完**。
 
 同时跑七八个 Claude Code 会话的时候，最难受的是三件事：**不知道哪个在等你**、
 **知道了也切不过去**、以及**它停下来的那一瞬你正好没在看**。
-Claude Hub 解决的就是这三件事。
+Vibe Foreman Free 解决的就是这三件事。
 
 <p align="center">
   <img src="docs/screenshots/01-hover.png" width="620" alt="鼠标经过刘海，露出每个会话的像素小人">
@@ -18,12 +20,15 @@ Claude Hub 解决的就是这三件事。
 
 [**最新版本**](../../releases/latest) · macOS 26+ · Apple Silicon 和 Intel 通用
 
-1. 打开 dmg，把 **Claude Hub** 拖进「应用程序」
-2. 双击 **安装 hook.command**
-3. `open -a "Claude Hub"`
+1. 打开 dmg，把 **Vibe Foreman Free** 拖进「应用程序」
+2. 打开它 —— hook 会自己装好，没有第三步
+
+首次启动时 app 会把 9 类 hook 写进 `~/.claude/settings.json`（只动它自己的那几条，
+你手写的 hook 不受影响），并把 `hubctl` 同步到 `~/.local/bin`。
+设置页能看到装了没有，装坏了那里也有一键修复。
 
 > 应用是自签名未公证的，首次打开需要**右键 → 打开**，
-> 或者 `xattr -dr com.apple.quarantine "/Applications/Claude Hub.app"`。
+> 或者 `xattr -dr com.apple.quarantine "/Applications/Vibe Foreman Free.app"`。
 
 ## 它能做什么
 
@@ -155,7 +160,7 @@ tmux 的默认语义是「关窗口 = detach，进程照跑」。这和人的直
 ### 高风险操作在岛上拦一下
 
 如果你和很多人一样开着 `--dangerously-skip-permissions`，那就没有任何刹车了。
-Claude Hub 只拦**不可逆**的那一档（`rm -rf /`、`git push --force` 到 main、
+Vibe Foreman Free 只拦**不可逆**的那一档（`rm -rf /`、`git push --force` 到 main、
 `drop database`、`kubectl delete` 之类），弹在岛上，拒绝是超时的默认值。
 
 日常的危险操作（`rm -rf ./tmp`、`git reset --hard`）默认**只记录不拦截** ——
