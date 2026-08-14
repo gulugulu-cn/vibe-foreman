@@ -46,6 +46,8 @@ public struct MainWindowView: View {
     @Bindable var verifierSettings: VerifierSettings
     let verifier: AcceptanceVerifier
     @Bindable var watchdog: SessionWatchdog
+    @Bindable var closedSessions: ClosedSessionStore
+    @Bindable var reaper: SessionReaper
     let channels: HookChannelMonitor
     let onJump: (String) -> Void
     let onLaunch: (Project, LaunchMode) -> Void
@@ -67,6 +69,8 @@ public struct MainWindowView: View {
         verifierSettings: VerifierSettings,
         verifier: AcceptanceVerifier,
         watchdog: SessionWatchdog,
+        closedSessions: ClosedSessionStore,
+        reaper: SessionReaper,
         channels: HookChannelMonitor,
         onJump: @escaping (String) -> Void,
         onLaunch: @escaping (Project, LaunchMode) -> Void
@@ -79,6 +83,8 @@ public struct MainWindowView: View {
         self.verifierSettings = verifierSettings
         self.verifier = verifier
         self.watchdog = watchdog
+        self.closedSessions = closedSessions
+        self.reaper = reaper
         self.channels = channels
         self.onJump = onJump
         self.onLaunch = onLaunch
@@ -119,7 +125,10 @@ public struct MainWindowView: View {
                 watchdog: watchdog, selection: $ledgerPath
             )
         case .projects:
-            ProjectsPane(projects: projects, store: store, git: git, onLaunch: onLaunch)
+            ProjectsPane(
+                projects: projects, store: store, git: git,
+                closedSessions: closedSessions, onLaunch: onLaunch
+            )
         case .usage:
             UsagePane()
         case .approvals:
@@ -127,7 +136,8 @@ public struct MainWindowView: View {
         case .settings:
             SettingsPane(
                 approvals: approvals, projects: projects, git: git,
-                placement: placement, channels: channels, verifierSettings: verifierSettings
+                placement: placement, channels: channels, verifierSettings: verifierSettings,
+                reaper: reaper
             )
         }
     }
@@ -339,6 +349,7 @@ struct ProjectsPane: View {
     let projects: ProjectStore
     let store: SessionStore
     let git: GitAccountStore
+    let closedSessions: ClosedSessionStore
     let onLaunch: (Project, LaunchMode) -> Void
 
     @State private var search = ""
@@ -474,6 +485,24 @@ struct ProjectsPane: View {
                                         Text(description)
                                             .font(.system(size: 12))
                                             .foregroundStyle(.secondary)
+                                    }
+                                    // 「关窗即结束」只有在还能接回来时才成立。
+                                    // 藏在 ▶ 菜单第三层的入口等于没有 ——
+                                    // 用户关掉窗口后第一眼看的就是这一行。
+                                    if runningCount(project) == 0,
+                                       let last = closedSessions.latest(forProject:
+                                            project.expandedPath) {
+                                        Button {
+                                            onLaunch(project, .resumeSession)
+                                        } label: {
+                                            Label(
+                                                "接着上次（\(RelativeTime.short(from: last.endedAt))前结束）",
+                                                systemImage: "arrow.uturn.backward.circle"
+                                            )
+                                            .font(.system(size: 11))
+                                        }
+                                        .buttonStyle(.link)
+                                        .help("恢复 \(last.name)，接着上次的上下文往下走")
                                     }
                                     Text(project.path)
                                         .font(.system(size: 11, design: .monospaced))
@@ -778,8 +807,42 @@ struct SettingsPane: View {
     @Bindable var placement: IslandPlacementStore
     let channels: HookChannelMonitor
     @Bindable var verifierSettings: VerifierSettings
+    @Bindable var reaper: SessionReaper
 
     @State private var hookStatus: String = "检查中…"
+
+    /// 「关掉终端窗口就结束会话」。
+    ///
+    /// **必须能关。** 这是全案第二个会主动杀进程的组件，一个杀错了没法
+    /// 阻止的自动行为不该存在。文案要把两侧的代价都说清楚：
+    /// 开着 = ⌘W 手滑会弄丢正在跑的活；关着 = 会话在后台留着，
+    /// 界面上标成"终端已关"但不动它。
+    @ViewBuilder
+    private var reaperCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("关掉终端窗口时结束会话", isOn: $reaper.enabled)
+                .font(.system(size: 14, weight: .semibold))
+
+            Text("""
+            tmux 默认的行为是关窗口只 detach，claude 进程照跑 —— 于是界面上一直\
+            显示"在跑"而你已经把窗口关了。打开这个开关后，检测到没有终端连着\
+            就结束它，**结束前会把 sessionId 记下来**，项目行上会出现「接着上次」\
+            一键接回原来的上下文。
+            """)
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            Text("""
+            代价：⌘W 手滑会结束正在跑的活（连续两轮、共 30 秒确认，\
+            会话起来不足 90 秒不动）。关掉这个开关则什么都不杀，\
+            只在项目行上标成"终端已关"。
+            """)
+            .font(.system(size: 11))
+            .foregroundStyle(reaper.enabled ? IslandTheme.waiting : Color.secondary.opacity(0.6))
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
 
     /// 「Hub 自己跑验收命令」的总开关。
     ///
@@ -859,6 +922,7 @@ struct SettingsPane: View {
 
             ScrollView {
                 VStack(spacing: 12) {
+                    Card { reaperCard }
                     Card { verifierCard }
                     Card { hookChannels }
                     Card {

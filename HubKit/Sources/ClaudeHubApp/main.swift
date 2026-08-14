@@ -37,7 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private lazy var island = IslandController(
         store: store, approvals: approvals, prompts: prompts, projects: projects,
-        placement: placement
+        closedSessions: closedSessions, placement: placement
     )
     private lazy var hooks = HookCoordinator(
         store: store, approvals: approvals, prompts: prompts,
@@ -45,6 +45,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private lazy var dispatch = TerminalDispatch()
     private lazy var stalls = StallWatcher(store: store)
+    /// 被结束掉的会话名册。回收器往里记，「接着上次」从里面读。
+    private let closedSessions = ClosedSessionStore()
+    /// 关掉终端窗口就结束会话。
+    private lazy var reaper = SessionReaper(store: store, closed: closedSessions)
 
     private var statusItem: NSStatusItem?
     private var mainWindow: NSWindow?
@@ -130,6 +134,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 盯梢本身没开销（没开着的项目直接跳过），但它会往终端注入文字 ——
         // 截图模式下绝不能起，那会往演示会话里敲字。
         if !screenshotMode { watchdog.start() }
+
+        // 回收器会杀进程，截图模式下绝不能起 —— 演示会话绑不到 pane 所以
+        // 实际上也杀不到，但这种"靠另一处的实现细节才安全"的依赖不该留着。
+        if !screenshotMode { reaper.start() }
 
         island.show()
         installStatusItem()
@@ -289,6 +297,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             verifierSettings: verifierSettings,
             verifier: verifier,
             watchdog: watchdog,
+            closedSessions: closedSessions,
+            reaper: reaper,
             channels: hooks.channels,
             onJump: { [weak self] sessionId in
                 self?.store.jump(to: sessionId)
@@ -320,9 +330,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let dispatch = self.dispatch
         let name = project.name
         let path = project.expandedPath
+
+        // 「接着上次」要的那个 id 只有这里知道 —— 回收器杀会话前记在名册里了。
+        //
+        // 不查名册的话 `.resumeSession` 会退化成 `claude --resume` 的交互列表，
+        // 而那个列表里全是一模一样的项目名和时间戳，用户得人肉认自己刚关掉的
+        // 是哪一个。能精确接回来才叫"打得开"。
+        let resumeId = mode == .resumeSession
+            ? closedSessions.latest(forProject: path)?.sessionId
+            : nil
+        // 接回来了就从"已结束"里划掉，否则界面会同时显示"在跑"和"上次结束于…"。
+        if let resumeId { closedSessions.forget(sessionId: resumeId) }
+
         // AppleScript + tmux 有跨进程成本，别卡住 UI。
         Task.detached(priority: .userInitiated) {
-            dispatch.open(project: name, path: path, mode: mode)
+            dispatch.open(project: name, path: path, mode: mode, sessionId: resumeId)
         }
     }
 }

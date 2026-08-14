@@ -179,29 +179,19 @@ public final class SessionStore {
 
     /// 纯计算：哪些会话所在的 tmux 会话没有客户端连着。
     ///
-    /// 绑不到 pane 的会话**不算 detached** —— 那是「根本不在 tmux 里」
-    /// （VS Code 扩展、直接开的终端、后台任务），它们有没有终端连着这里
-    /// 判断不了，硬报成 detached 就是拿"不知道"当结论。
+    /// 判定本体在 `DetachedSessions` —— **回收器用的必须是同一份**，
+    /// 否则会出现"它杀了一个界面上显示正常的会话"。
     nonisolated static func detachedIds(
         sessions: [AgentSession],
         panes: [TmuxPane],
         attached: Set<String>,
         tree: ProcessTree
     ) -> Set<String> {
-        guard !sessions.isEmpty, !panes.isEmpty else { return [] }
-
-        let bound = TmuxProbe().bindPanes(
-            to: Set(sessions.map(\.pid)), tree: tree, panes: panes
+        Set(
+            DetachedSessions.pairs(
+                sessions: sessions, panes: panes, attached: attached, tree: tree
+            ).map(\.session.sessionId)
         )
-        let sessionIdByPid = Dictionary(
-            sessions.map { ($0.pid, $0.sessionId) }, uniquingKeysWith: { a, _ in a }
-        )
-
-        var result: Set<String> = []
-        for (pid, pane) in bound where !attached.contains(pane.sessionName) {
-            if let sessionId = sessionIdByPid[pid] { result.insert(sessionId) }
-        }
-        return result
     }
 
     /// 观测 busy → idle 的跃迁，记下这一轮活干了多久。

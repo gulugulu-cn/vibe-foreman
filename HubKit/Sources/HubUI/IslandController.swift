@@ -18,6 +18,7 @@ public final class IslandController {
     private let approvals: ApprovalCoordinator
     private let prompts: AgentPromptCoordinator
     private let projects: ProjectStore
+    private let closedSessions: ClosedSessionStore
     private let placement: IslandPlacementStore
     private let model = IslandModel()
 
@@ -61,12 +62,14 @@ public final class IslandController {
         approvals: ApprovalCoordinator,
         prompts: AgentPromptCoordinator,
         projects: ProjectStore,
+        closedSessions: ClosedSessionStore,
         placement: IslandPlacementStore
     ) {
         self.store = store
         self.approvals = approvals
         self.prompts = prompts
         self.projects = projects
+        self.closedSessions = closedSessions
         self.placement = placement
         placement.onChange = { [weak self] in self?.relocate() }
     }
@@ -206,6 +209,7 @@ public final class IslandController {
                 approvals: approvals,
                 prompts: prompts,
                 projects: projects,
+                closedSessions: closedSessions,
                 model: model,
                 geometry: geo,
                 onToggleExpand: { [weak self] in self?.toggleExpand() },

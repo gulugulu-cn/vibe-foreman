@@ -18,6 +18,7 @@ public struct IslandRootView: View {
     private let approvals: ApprovalCoordinator
     private let prompts: AgentPromptCoordinator
     private let projects: ProjectStore
+    private let closedSessions: ClosedSessionStore
     private let model: IslandModel
     private let geometry: NotchGeometry
     private let onToggleExpand: () -> Void
@@ -36,6 +37,7 @@ public struct IslandRootView: View {
         approvals: ApprovalCoordinator,
         prompts: AgentPromptCoordinator,
         projects: ProjectStore,
+        closedSessions: ClosedSessionStore,
         model: IslandModel,
         geometry: NotchGeometry,
         onToggleExpand: @escaping () -> Void,
@@ -54,6 +56,7 @@ public struct IslandRootView: View {
         self.approvals = approvals
         self.prompts = prompts
         self.projects = projects
+        self.closedSessions = closedSessions
         self.model = model
         self.geometry = geometry
         self.onToggleExpand = onToggleExpand
@@ -269,6 +272,7 @@ public struct IslandRootView: View {
             ExpandedContent(
                 store: store,
                 projects: projects,
+                closedSessions: closedSessions,
                 model: model,
                 onSelect: onSelect,
                 onCollapse: onCollapse,
@@ -823,6 +827,7 @@ struct WaitingHalo: View {
 struct ExpandedContent: View {
     let store: SessionStore
     let projects: ProjectStore
+    let closedSessions: ClosedSessionStore
     let model: IslandModel
     let onSelect: (AgentSession) -> Void
     let onCollapse: () -> Void
@@ -843,7 +848,8 @@ struct ExpandedContent: View {
             switch model.tab {
             case .sessions: sessionsBody
             case .projects: ProjectListContent(
-                projects: projects, store: store, onJump: onSelect, onLaunch: onLaunch
+                projects: projects, store: store, closedSessions: closedSessions,
+                onJump: onSelect, onLaunch: onLaunch
             )
             }
         }
@@ -981,6 +987,7 @@ struct ExpandedContent: View {
 struct ProjectListContent: View {
     let projects: ProjectStore
     let store: SessionStore
+    let closedSessions: ClosedSessionStore
     let onJump: (AgentSession) -> Void
     let onLaunch: (Project, LaunchMode) -> Void
 
@@ -1012,6 +1019,9 @@ struct ProjectListContent: View {
                                 running: sessions(of: project),
                                 git: projects.git(for: project),
                                 isPinned: projects.isPinned(project),
+                                resumable: closedSessions.latest(
+                                    forProject: project.expandedPath
+                                ),
                                 onOpen: { open(project) },
                                 onLaunch: { onLaunch(project, $0) },
                                 onTogglePin: { projects.togglePin(project) }
@@ -1070,6 +1080,9 @@ struct ProjectRowView: View {
     let running: [AgentSession]
     let git: GitInfo?
     let isPinned: Bool
+    /// 上一个被「关窗即结束」收掉、且接得回来的会话。
+    /// 有它就说明这个项目"关掉了但没干完"，菜单第一项应该是接回去而不是重开。
+    var resumable: ClosedSession?
     let onOpen: () -> Void
     let onLaunch: (LaunchMode) -> Void
     let onTogglePin: () -> Void
@@ -1100,7 +1113,17 @@ struct ProjectRowView: View {
 
     /// 启动菜单：LaunchMode 全集 + 置顶。整行点击和 "..." 共用。
     private func presentLaunchMenu() {
-        var items: [RowMenu.Item?] = LaunchMode.allCases
+        var items: [RowMenu.Item?] = []
+        // 「接着上次」排第一，且只在真的有东西可接时出现。
+        // 关掉窗口后回来的人想要的是接着往下走，不是从空白开一个新的 ——
+        // 把它埋在「Claude Code」下面等于让用户每次都重开一个。
+        if let resumable {
+            items.append(RowMenu.Item(
+                "接着上次（\(RelativeTime.short(from: resumable.endedAt))前结束）"
+            ) { onLaunch(.resumeSession) })
+            items.append(nil)
+        }
+        items += LaunchMode.allCases
             .filter { $0 != .resumeSession }
             .map { mode in RowMenu.Item(mode.label) { onLaunch(mode) } }
         items.append(nil)
