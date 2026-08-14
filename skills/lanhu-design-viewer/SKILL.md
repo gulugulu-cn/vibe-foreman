@@ -10,6 +10,9 @@ description: Use when viewing Demo design specs on Lanhu (蓝湖), extracting de
 
 ## 设计稿链接
 
+> 下面是模板。把 `YOUR_*` 换成你自己蓝湖项目的 id ——
+> 在蓝湖里打开设计稿，地址栏的 `pid` / `image_id` 就是。
+
 ### Mobile 设计稿 (iPhone)
 ```
 https://lanhuapp.com/web/#/item/project/detailDetach?pid=YOUR_PROJECT_ID&project_id=YOUR_PROJECT_ID&image_id=YOUR_MOBILE_IMAGE_ID&fromEditor=true

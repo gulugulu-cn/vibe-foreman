@@ -61,7 +61,7 @@ Hub 使用 AppleScript（osascript）自动控制 iTerm2 创建标签页、切�
 ### 4. 克隆并初始化
 
 ```bash
-git clone https://github.com/hengjun-dev/claude-hub.git ~/Documents/code/claude-hub
+git clone https://github.com/gulu-cn/claude-hub.git ~/Documents/code/claude-hub
 cd ~/Documents/code/claude-hub
 
 # 一键初始化：注入全局 hooks + 生成语音文件 + 自动编译托盘 app
