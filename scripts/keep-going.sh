@@ -2,8 +2,13 @@
 # 盯住某个 tmux 窗口里的 Claude，停下来就追问，直到它把活干透。
 #
 # 用法：bash keep-going.sh <tmux窗口> [追问清单文件|单条催促语]
-#   例：bash keep-going.sh hub:1 probes/agentx-training.txt
+#   例：bash keep-going.sh hub:1 ~/my-probes/training.txt
 #       bash keep-going.sh hub:1 "继续，不要停"
+#
+# 清单文件放仓库外。**这是刻意的**：追问清单会写满「这个项目该做什么、
+# 卡在哪、下一步是什么」——那是项目内情，不是工具的一部分。
+# 放进仓库就等于把它跟着工具一起发出去了。
+# 格式很简单：一条一行，# 开头是注释，空行忽略。
 #
 # ── 为什么是「追问清单」而不是一句「继续」 ──────────────────────
 #
