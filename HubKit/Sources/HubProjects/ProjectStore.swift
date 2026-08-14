@@ -97,6 +97,9 @@ public final class ProjectStore {
                     .appendingPathComponent("projects.yaml")
             )
         }
+        // 仓库改过名，新旧两个目录名都找。Application Support 那份**不改名** ——
+        // 那是用户数据落盘的地方，改了等于把已有的配置全孤立掉。
+        urls.append(home.appendingPathComponent("Documents/code/vibe-foreman/projects.yaml"))
         urls.append(home.appendingPathComponent("Documents/code/claude-hub/projects.yaml"))
         urls.append(
             home.appendingPathComponent("Library/Application Support/claude-hub/projects.yaml")

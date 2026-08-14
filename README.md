@@ -229,7 +229,7 @@ transcript 的尾部，以及在项目目录跑 `git status` / `git log`。
 ## 从源码构建
 
 ```bash
-git clone https://github.com/gulugulu-cn/claude-hub.git ~/Documents/code/claude-hub
+git clone https://github.com/gulugulu-cn/vibe-foreman.git ~/Documents/code/vibe-foreman
 cd ~/Documents/code/claude-hub
 bash scripts/setup.sh            # 注入 hook + 编译安装
 ```

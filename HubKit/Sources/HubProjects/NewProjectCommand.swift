@@ -80,7 +80,7 @@ public struct NewProjectCommand: Equatable, Sendable {
             if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
         }
         return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Documents/code/claude-hub/scripts/new-project.sh")
+            .appendingPathComponent("Documents/code/vibe-foreman/scripts/new-project.sh")
     }
 
     /// GUI app 从 launchd 继承的 PATH 只有系统四件套，gh（/usr/local/bin 或

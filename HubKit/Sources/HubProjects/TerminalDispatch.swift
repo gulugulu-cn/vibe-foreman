@@ -240,6 +240,10 @@ public struct TerminalDispatch: Sendable {
     static func locateScript(_ name: String) -> String? {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let candidates = [
+            // 仓库改过名（claude-hub → vibe-foreman），两个都要认：
+            // 老用户的工作区还叫旧名，新 clone 的是新名。少认一个的表现是
+            // "从界面开项目时项目配置没被补齐"，而那是**静默的**。
+            "\(home)/Documents/code/vibe-foreman/scripts/\(name)",
             "\(home)/Documents/code/claude-hub/scripts/\(name)",
             "\(home)/.local/share/claude-hub/scripts/\(name)",
         ]
