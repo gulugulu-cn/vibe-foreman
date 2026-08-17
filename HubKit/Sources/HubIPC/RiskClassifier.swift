@@ -51,7 +51,25 @@ public struct RiskClassifier: Sendable {
         let readOnlyTools: Set<String> = [
             "Read", "Grep", "Glob", "WebFetch", "WebSearch", "TodoWrite", "Task",
         ]
-        if readOnlyTools.contains(toolName) { return .normal }
+        if readOnlyTools.contains(toolName) {
+            // 唯一的例外：**读密钥文件正是要拦的那一件事**。
+            //
+            // 共用密钥交给 AI 的契约是 `set -a; source '<路径>'; set +a`——
+            // 那样值只出现在子进程的环境里。一旦改用 `Read`，文件内容就进了
+            // `~/.claude/projects/*.jsonl`（0644、永久、每轮重发给 API），
+            // 而 Hub 自己的验收清单也会把它抄一份存下来。
+            //
+            // 这道闸只挡**诚实 agent 的手滑**：`python -c` 读、软链绕过、
+            // base64 转一道都拦不住，而且 hubctl 超时是 fail-open，
+            // **app 没开着的时候这道闸是关的**。它不是安全边界，是一次提醒。
+            //
+            // 只放在这个分支里，不放在函数开头：Bash 走的是下面的模式匹配，
+            // 那里 `\.env\b` 已经把它定成 dangerous（记录不拦截）。
+            // 提到函数开头的话，约定用法里的那条 `source` 命令会每次都弹审批，
+            // 等于把正常流程堵死。
+            if let summary, SensitivePaths.matches(summary) { return .irreversible }
+            return .normal
+        }
 
         guard let summary, !summary.isEmpty else { return .normal }
         let text = summary.lowercased()
