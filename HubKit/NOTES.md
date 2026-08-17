@@ -494,6 +494,95 @@ projects: []          ← 解析器看到这行就认定项目段是空的
 残留的尾巴要留到下一块开头拼接。写错的表现是"大文件统计偏低"——
 数字只是小一点，不会报错，极难发现。
 
+## 密钥与加密
+
+### `.atomic` 写会换 inode，chmod 必须每次都做一遍
+
+`data.write(to:options:.atomic)` 是「写临时文件 → rename」。临时文件按 umask 建（通常 0644），
+rename 之后**这是一个新的 inode** —— 上一次 `chmod 0600` 设在旧 inode 上，
+跟眼前这个文件毫无关系。
+
+只在创建时设一次权限的写法，从**第二次**写入开始就是 0644，而且完全没有症状：
+文件在、内容对、程序正常。`EnvMaterializerTests.testPermissionsSurviveRewrite`
+就是连写两次再断言权限。
+
+真正承重的其实是**目录的 0700**：文件权限有个短暂窗口（临时文件建好到 rename 之间）
+是敞开的，目录进不去才让那个窗口没有意义。
+
+### GCM 的 AAD 必须用「文件里存下来的那段字节」，不能重新序列化
+
+如果 AAD 是「把 header 结构体再 `JSONEncoder` 编码一遍得到的字节」，那么
+Swift 版本升级、`Date` 编码策略变化、字典键序变化 —— 任何一个都会让
+**所有历史文件永久打不开**。
+
+和 `HookInstaller` 那句「`.sortedKeys` 不是审美，是幂等的前提」是同一个道理，
+但后果严重一个量级：那边是每隔几次启动无意义地改一次用户文件，
+这边是数据再也拿不回来。所以 `VaultCrypto.parse` 会把 `headerBytes` 原样返回，
+`open` 直接拿它当 AAD。
+
+### 「钥匙不对」和「文件坏了」的处置完全相反
+
+- 钥匙不对（换机、重装、钥匙串被重建）：**数据是好的**，绝不能改名或覆盖，
+  只能锁住等用户拿恢复码回来
+- 文件坏了：改名 `.broken-<时间>` 保住，原位置才允许重建
+
+分不出这两种，就一定会在某一次钥匙串抽风时把好数据当垃圾清掉 ——
+`AcceptanceStore.swift:514-518` 那次事故（解码失败 → 内存空 → 下次写入覆盖）
+在加密之后触发面大了三倍：写坏、钥匙没了、拿到另一把钥匙、GCM 认证失败。
+
+header 里的 `keyID` 就是为了分出这两种情况才存在的，而
+`EncryptedFile.save()` 第一行的 `guard state.canWrite` 是这套区分唯一的落地点。
+
+### Keychain 的授权弹窗就是那道防线，不能为了消掉它放宽 ACL
+
+`SecItemAdd` 不传 `kSecAttrAccess` 时，默认 ACL 是「只有创建它的 app 能无提示读取」。
+在「攻击者 = 跟你同一个 uid 跑的自动化」这个模型下，
+**能区分「Vibe Foreman 在读」和「`security find-generic-password` 在读」的只有它** ——
+文件权限做不到（同一个 uid），Touch ID 也做不到（`LAContext` 只是 UI 门，不参与取密钥）。
+
+改成 `SecAccessCreate` + 空信任列表就再也不弹了，代价是 Claude Code 一条 Bash
+就能取走主密钥，然后五行脚本解开整个密码库。
+
+弹窗频率取决于签名（`scripts/build-swift-app.sh`）：有 `Claude Hub Dev` 自签名证书时，
+ACL 存的 designated requirement 是「bundle id + 证书」，**不含 cdhash**，重编不失效；
+ad-hoc 回落（`codesign --sign -`）时含 cdhash，每次重编都失效。
+构建脚本注释里那句「自签名证书让 TCC 授权在每次重编后仍然有效」说的是同一套匹配逻辑。
+
+### `LAContext` 复用才有 reuse duration
+
+`touchIDAuthenticationAllowableReuseDuration` **只对同一个 `LAContext` 实例生效**。
+每次验证都 `LAContext()` 新建一个的话，这个设置等于没设 ——
+用户每看一条密码就得按一次指纹，很快就会把功能关掉。见 `LAContextHolder`。
+
+### 剪贴板定时清空必须比对 `changeCount`
+
+复制密码之后 N 秒自动清空，听起来只是个 `Task.sleep` + `clearContents()`。
+但用户在这几十秒里多半会复制别的东西，到点再清就变成
+「复制了个链接，一分钟后剪贴板莫名其妙空了」—— 这种 bug 用户根本不会
+联想到密码功能上，只会觉得系统抽风。
+
+`declareTypes` 会推进 `changeCount`，`setString` 不会，所以写完之后取到的
+就是「我们这次复制」的版本号，到点比一下不一样就别动。
+
+### `.env` 的引号：三家的交集只有单引号
+
+消费者是 `source` 它的 shell、node 的 dotenv、python-dotenv。
+唯一的语义交集是**单引号内不做任何展开**。双引号在三家手里行为各不相同。
+
+两个具体的坑：
+
+- **多行值（PEM）要写字面换行，不能写 `\n`。** `\n` 只有 dotenv 的**双引号**下
+  才还原，而 sh 的双引号**不还原**。
+- **含单引号的值没有共同解。** sh 要写成 `'\''`，而 node dotenv 的正则是
+  `'([^']*)'`，遇到第一个 `'` 就截断拿到残值。所以那种值改写成 `KEY_B64`，
+  显式降级 + 在文件头写清楚，而不是静默写出一个残值 ——
+  后者会表现成「密钥明明是对的但接口就是不通」。
+
+### 生成的文件里不能有时间戳
+
+有时间戳，「内容没变就不写」永远命不中，于是每次启动都重写一遍密钥文件，
+而每次重写都是一次上面那个权限回归的窗口。
+
 ## 工程
 
 ### 日志：`NSLog` 的插值会被隐成 `<private>`

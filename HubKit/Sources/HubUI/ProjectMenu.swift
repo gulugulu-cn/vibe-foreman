@@ -22,7 +22,12 @@ enum ProjectMenu {
         isMissing: Bool = false,
         onLaunch: @escaping (LaunchMode) -> Void,
         onTogglePin: @escaping () -> Void,
-        onRemove: (() -> Void)? = nil
+        onRemove: (() -> Void)? = nil,
+        /// 这个项目绑了共用密钥时才有。给的是路径，不是值。
+        ///
+        /// 只做「复制路径」不做「跳到密钥页」：岛和主窗口都得有同一项，
+        /// 而"跳到某一页"在岛上没有对应物。复制路径两边都成立，菜单也就不会漂。
+        onCopySecretPath: (() -> Void)? = nil
     ) -> [RowMenu.Item?] {
         var items: [RowMenu.Item?] = []
 
@@ -54,6 +59,11 @@ enum ProjectMenu {
         items += LaunchMode.allCases
             .filter { $0 != .resumeSession }
             .map { mode in RowMenu.Item(mode.label) { onLaunch(mode) } }
+
+        if let onCopySecretPath {
+            items.append(nil)
+            items.append(RowMenu.Item("复制密钥路径", action: onCopySecretPath))
+        }
 
         items.append(nil)
         items.append(RowMenu.Item(isPinned ? "取消置顶" : "置顶", action: onTogglePin))

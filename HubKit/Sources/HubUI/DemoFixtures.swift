@@ -105,6 +105,14 @@ public enum DemoFixtures {
         root.appendingPathComponent("projects.yaml")
     }
 
+    /// 演示模式下密钥物化的落点。
+    ///
+    /// 截图脚本会反复起停 app，绝不能让它去动真的 `~/.vibe-foreman` ——
+    /// 那里面是用户的真密钥，而 `reconcile` 是会删文件的。
+    public static var scratchRoot: URL {
+        root.appendingPathComponent("vibe-foreman", isDirectory: true)
+    }
+
     /// 把合成数据写到磁盘。必须在 store 首次读取之前调用。
     public static func materialize() {
         let fm = FileManager.default

@@ -8,7 +8,7 @@
 git clone https://github.com/gulugulu-cn/vibe-foreman.git ~/Documents/code/vibe-foreman
 cd ~/Documents/code/vibe-foreman
 bash scripts/setup.sh          # 编译 + 安装到 /Applications
-cd HubKit && swift test        # 530 个测试，约 25 秒
+cd HubKit && swift test        # 617 个测试，约 45 秒
 ```
 
 需要 **macOS 26 SDK（Xcode 26）** —— 灵动岛依赖 Liquid Glass API，这是硬门槛。

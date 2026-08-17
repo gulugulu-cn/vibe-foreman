@@ -411,9 +411,7 @@ struct SessionDetailCard: View {
     }
 
     private func copy(_ value: String) {
-        let board = NSPasteboard.general
-        board.clearContents()
-        board.setString(value, forType: .string)
+        Clipboard.copy(value)
     }
 
     private func iconButton(

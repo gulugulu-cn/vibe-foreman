@@ -10,6 +10,11 @@ public enum DashboardSection: String, CaseIterable, Identifiable, Sendable {
     case sessions = "会话"
     case acceptance = "验收"
     case projects = "项目"
+    // 两个密钥相关的分区**刻意分开两行**，不合成一个「凭据」页：
+    // 一个的值会写成明文文件给 AI 用，一个绝不给任何自动化看到。
+    // 放进同一个页面只会让人以为它们是一回事，然后把线上库的密码填错地方。
+    case secrets = "共用密钥"
+    case credentials = "账号密码"
     case usage = "用量"
     case approvals = "审批日志"
     case settings = "设置"
@@ -21,6 +26,8 @@ public enum DashboardSection: String, CaseIterable, Identifiable, Sendable {
         case .sessions: return "bolt.horizontal.circle"
         case .acceptance: return "checklist"
         case .projects: return "folder"
+        case .secrets: return "key.fill"
+        case .credentials: return "lock.fill"
         case .usage: return "chart.bar"
         case .approvals: return "checkmark.shield"
         case .settings: return "gearshape"
@@ -48,6 +55,8 @@ public struct MainWindowView: View {
     @Bindable var watchdog: SessionWatchdog
     @Bindable var closedSessions: ClosedSessionStore
     @Bindable var reaper: SessionReaper
+    @Bindable var secrets: SharedSecretStore
+    @Bindable var credentials: CredentialStore
     let channels: HookChannelMonitor
     let onJump: (String) -> Void
     let onLaunch: (Project, LaunchMode) -> Void
@@ -71,6 +80,8 @@ public struct MainWindowView: View {
         watchdog: SessionWatchdog,
         closedSessions: ClosedSessionStore,
         reaper: SessionReaper,
+        secrets: SharedSecretStore,
+        credentials: CredentialStore,
         channels: HookChannelMonitor,
         onJump: @escaping (String) -> Void,
         onLaunch: @escaping (Project, LaunchMode) -> Void
@@ -85,6 +96,8 @@ public struct MainWindowView: View {
         self.watchdog = watchdog
         self.closedSessions = closedSessions
         self.reaper = reaper
+        self.secrets = secrets
+        self.credentials = credentials
         self.channels = channels
         self.onJump = onJump
         self.onLaunch = onLaunch
@@ -127,8 +140,12 @@ public struct MainWindowView: View {
         case .projects:
             ProjectsPane(
                 projects: projects, store: store, git: git,
-                closedSessions: closedSessions, onLaunch: onLaunch
+                closedSessions: closedSessions, secrets: secrets, onLaunch: onLaunch
             )
+        case .secrets:
+            SecretsPane(secrets: secrets, projects: projects)
+        case .credentials:
+            CredentialsPane(credentials: credentials, projects: projects)
         case .usage:
             UsagePane()
         case .approvals:
@@ -350,6 +367,7 @@ struct ProjectsPane: View {
     let store: SessionStore
     let git: GitAccountStore
     let closedSessions: ClosedSessionStore
+    let secrets: SharedSecretStore
     let onLaunch: (Project, LaunchMode) -> Void
 
     @State private var search = ""
@@ -421,7 +439,10 @@ struct ProjectsPane: View {
             isMissing: projects.isMissing(project),
             onLaunch: { onLaunch(project, $0) },
             onTogglePin: { projects.togglePin(project) },
-            onRemove: { projects.remove([project]) }
+            onRemove: { projects.remove([project]) },
+            onCopySecretPath: secrets.groups(for: project).isEmpty ? nil : {
+                Clipboard.copy(secrets.envFilePath(for: project))
+            }
         )
     }
 
@@ -1080,8 +1101,7 @@ struct SettingsPane: View {
                                     .font(.system(size: 11, design: .monospaced))
                                     .foregroundStyle(.tertiary)
                                 Button("复制命令") {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString("gh auth login", forType: .string)
+                                    Clipboard.copy("gh auth login")
                                 }
                                 .font(.system(size: 11))
                             }
