@@ -14,6 +14,8 @@ struct SecretsPane: View {
     @State private var revealed: Set<UUID> = []
     @State private var newGroupName = ""
     @State private var copied: String?
+    /// 哪几个项目把「给 AI 的话」展开着。key 是 `Project.id`。
+    @State private var promptShown: Set<String> = []
 
     private var selectedGroup: SecretGroup? {
         secrets.groups.first { $0.id == selection }
@@ -187,43 +189,85 @@ struct SecretsPane: View {
 
     private func projectRow(_ project: Project, group: SecretGroup) -> some View {
         let bound = secrets.isBound(group, to: project)
-        return HStack(spacing: 8) {
-            Toggle(isOn: Binding(
-                get: { bound },
-                set: { secrets.setBinding(groupID: group.id, project: project, bound: $0) }
-            )) {
-                Text(project.name).font(.system(size: 12))
-            }
-            .toggleStyle(.checkbox)
-
-            Spacer()
-
-            if bound {
-                Button("复制路径") {
-                    Clipboard.copy(secrets.envFilePath(for: project))
-                    flash("路径已复制")
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Toggle(isOn: Binding(
+                    get: { bound },
+                    set: { secrets.setBinding(groupID: group.id, project: project, bound: $0) }
+                )) {
+                    Text(project.name).font(.system(size: 12))
                 }
-                .font(.system(size: 11))
+                .toggleStyle(.checkbox)
 
-                Button("复制给 AI 的话") {
-                    Clipboard.copy(secrets.aiPrompt(for: project))
+                Spacer()
+
+                if bound {
+                    Button("复制路径") {
+                        Clipboard.copy(secrets.envFilePath(for: project))
+                        flash("路径已复制")
+                    }
+                    .font(.system(size: 11))
+
+                    Button(promptShown.contains(project.id) ? "收起话术" : "看话术") {
+                        if promptShown.contains(project.id) {
+                            promptShown.remove(project.id)
+                        } else {
+                            promptShown.insert(project.id)
+                        }
+                    }
+                    .font(.system(size: 11))
+                    .help("展开就能看到要发给 AI 的原话，可以直接选中复制")
+
+                    Button {
+                        NSWorkspace.shared.activateFileViewerSelecting(
+                            [URL(fileURLWithPath: secrets.envFilePath(for: project))]
+                        )
+                    } label: { Image(systemName: "folder") }
+                        .buttonStyle(.borderless)
+                        .help("在 Finder 里看")
+                }
+            }
+            if bound, promptShown.contains(project.id) {
+                promptBlock(for: project)
+            }
+        }
+    }
+
+    /// 要发给 AI 的原话，**摊在界面上**。
+    ///
+    /// 原来只有一个「复制给 AI 的话」按钮 —— 复制之前你根本不知道它会往剪贴板里塞什么。
+    /// 一个内容不可见的复制按钮，用户要么不敢点，要么点了粘出来才发现不是想要的，
+    /// 而这段话恰恰是要**替他去管住 AI** 的，他更有理由先看一眼。
+    ///
+    /// 文本可选中：整段复制走按钮，只想拿其中一句就直接划走。
+    private func promptBlock(for project: Project) -> some View {
+        let prompt = secrets.aiPrompt(for: project)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(prompt)
+                .font(.system(size: 11, design: .monospaced))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 8) {
+                Button("复制这段") {
+                    Clipboard.copy(prompt)
                     flash("已复制 —— 里面写明了用 source 而不是 Read")
                 }
                 .font(.system(size: 11))
-                // 复制裸路径的下场是 AI 用 Read 打开它，密钥就进了
-                // ~/.claude/projects/*.jsonl（0644、永久、每轮重发），
-                // 而且 Hub 自己的验收清单也会抄一份。这段话带 source 用法和禁令。
-                .help("带用法和禁令的一段话，比直接给路径安全")
 
-                Button {
-                    NSWorkspace.shared.activateFileViewerSelecting(
-                        [URL(fileURLWithPath: secrets.envFilePath(for: project))]
-                    )
-                } label: { Image(systemName: "folder") }
-                    .buttonStyle(.borderless)
-                    .help("在 Finder 里看")
+                // 这句是这段话真正的重点，值得在界面上再说一次：
+                // 让 AI 去 Read 那个文件，密钥就进了 transcript（0644、永久、
+                // 每轮重发给 API），而且 Hub 自己的验收清单也会抄一份存下来。
+                Text("第二句是重点：`source` 只把值放进那条命令的环境，`Read` 会把值留在对话记录里")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
             }
         }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background.tertiary, in: .rect(cornerRadius: 8, style: .continuous))
+        .padding(.leading, 20)
     }
 
     private func dangerCard(_ group: SecretGroup) -> some View {
