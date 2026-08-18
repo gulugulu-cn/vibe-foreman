@@ -237,6 +237,28 @@ public final class ApprovalCoordinator {
         trimLog()
     }
 
+    /// 密钥泄漏闸拦下的一次调用。
+    ///
+    /// 和别的日志条目不同：这条**不是这里决策的** —— hubctl 在本地就拒了，
+    /// 我们只是把它记下来。所以 verdict 写死 `guard-deny`，
+    /// 不要拿它当"审批流程走过一遍"的证据。
+    public func recordSecretGuardBlock(
+        projectName: String, toolName: String, command: String, reason: String
+    ) {
+        log.insert(
+            ApprovalLogEntry(
+                id: UUID().uuidString, timestamp: Date(), projectName: projectName,
+                toolName: toolName,
+                // 命令本身可能什么都看不出来（比如 Write 只带文件名），
+                // 把拦截理由拼上去，日志里一眼能看懂为什么被拦。
+                command: command.isEmpty ? reason : "\(command)\n\(reason)",
+                risk: .irreversible, verdict: "guard-deny", intercepted: true
+            ),
+            at: 0
+        )
+        trimLog()
+    }
+
     private func appendLog(request: ApprovalRequest, verdict: String, intercepted: Bool) {
         log.insert(
             ApprovalLogEntry(

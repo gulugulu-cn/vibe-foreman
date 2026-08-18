@@ -29,6 +29,8 @@ public struct IslandRootView: View {
     private let onPickStalled: (StallFinding) -> Void
     private let onReply: (String) -> Void
     private let onDialogKey: (AgentPromptRequest, TerminalReply.DialogKey) -> Void
+    /// 问某个项目的共用密钥路径。nil（闭包本身或者返回值）= 菜单里不给这一项。
+    private let onSecretPath: ((Project) -> String?)?
 
     @Namespace private var glassNamespace
 
@@ -47,8 +49,10 @@ public struct IslandRootView: View {
         onLaunch: @escaping (Project, LaunchMode) -> Void,
         onPickStalled: @escaping (StallFinding) -> Void = { _ in },
         onReply: @escaping (String) -> Void = { _ in },
-        onDialogKey: @escaping (AgentPromptRequest, TerminalReply.DialogKey) -> Void = { _, _ in }
+        onDialogKey: @escaping (AgentPromptRequest, TerminalReply.DialogKey) -> Void = { _, _ in },
+        onSecretPath: ((Project) -> String?)? = nil
     ) {
+        self.onSecretPath = onSecretPath
         self.onPickStalled = onPickStalled
         self.onReply = onReply
         self.onDialogKey = onDialogKey
@@ -277,6 +281,7 @@ public struct IslandRootView: View {
                 onSelect: onSelect,
                 onCollapse: onCollapse,
                 onLaunch: onLaunch,
+                onSecretPath: onSecretPath,
                 onPickStalled: onPickStalled
             )
         case .intrusion:
@@ -832,6 +837,7 @@ struct ExpandedContent: View {
     let onSelect: (AgentSession) -> Void
     let onCollapse: () -> Void
     let onLaunch: (Project, LaunchMode) -> Void
+    var onSecretPath: ((Project) -> String?)?
     var onPickStalled: (StallFinding) -> Void = { _ in }
 
     private var selected: AgentSession? {
@@ -849,7 +855,8 @@ struct ExpandedContent: View {
             case .sessions: sessionsBody
             case .projects: ProjectListContent(
                 projects: projects, store: store, closedSessions: closedSessions,
-                onJump: onSelect, onLaunch: onLaunch
+                onJump: onSelect, onLaunch: onLaunch,
+                onSecretPath: onSecretPath
             )
             }
         }
@@ -990,11 +997,18 @@ struct ProjectListContent: View {
     let closedSessions: ClosedSessionStore
     let onJump: (AgentSession) -> Void
     let onLaunch: (Project, LaunchMode) -> Void
+    var onSecretPath: ((Project) -> String?)?
 
     /// 这个项目下正在跑的会话（cwd 落在项目目录里就算）。
     private func sessions(of project: Project) -> [AgentSession] {
         let root = project.expandedPath
         return store.sessions.filter { $0.cwd == root || $0.cwd.hasPrefix(root + "/") }
+    }
+
+    /// 没绑定共用密钥就返回 nil，菜单里那一项也就不出现 —— 和主窗口的条件一致。
+    private func secretPathAction(for project: Project) -> (() -> Void)? {
+        guard let path = onSecretPath?(project) else { return nil }
+        return { Clipboard.copy(path) }
     }
 
     private var ordered: [Project] {
@@ -1026,7 +1040,8 @@ struct ProjectListContent: View {
                                 onOpen: { open(project) },
                                 onLaunch: { onLaunch(project, $0) },
                                 onTogglePin: { projects.togglePin(project) },
-                                onRemove: { projects.remove([project]) }
+                                onRemove: { projects.remove([project]) },
+                                onCopySecretPath: secretPathAction(for: project)
                             )
                         }
                     }
@@ -1092,6 +1107,7 @@ struct ProjectRowView: View {
     let onLaunch: (LaunchMode) -> Void
     let onTogglePin: () -> Void
     var onRemove: (() -> Void)?
+    var onCopySecretPath: (() -> Void)?
 
     @State private var isHovered = false
 
@@ -1127,7 +1143,8 @@ struct ProjectRowView: View {
         RowMenu.present(
             ProjectMenu.items(
                 isPinned: isPinned, resumable: resumable, isMissing: isMissing,
-                onLaunch: onLaunch, onTogglePin: onTogglePin, onRemove: onRemove
+                onLaunch: onLaunch, onTogglePin: onTogglePin, onRemove: onRemove,
+                onCopySecretPath: onCopySecretPath
             )
         )
     }

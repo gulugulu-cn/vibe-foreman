@@ -10,17 +10,40 @@ public enum DashboardSection: String, CaseIterable, Identifiable, Sendable {
     case sessions = "会话"
     case acceptance = "验收"
     case projects = "项目"
+    // 两个密钥相关的分区**刻意分开两行**，不合成一个「凭据」页：
+    // 一个的值会写成明文文件给 AI 用，一个绝不给任何自动化看到。
+    // 放进同一个页面只会让人以为它们是一回事，然后把线上库的密码填错地方。
+    case secrets = "共用密钥"
+    case credentials = "账号密码"
     case usage = "用量"
     case approvals = "审批日志"
     case settings = "设置"
 
     public var id: String { rawValue }
 
+    /// 给脚本用的英文短名 —— rawValue 是中文，写进 shell 脚本会很难看，
+    /// 而且 `HUB_ISLAND_STATE` 那批已有的形态名也全是英文。
+    static func fromShortName(_ name: String?) -> DashboardSection? {
+        switch name {
+        case "sessions": return .sessions
+        case "acceptance": return .acceptance
+        case "projects": return .projects
+        case "secrets": return .secrets
+        case "credentials": return .credentials
+        case "usage": return .usage
+        case "approvals": return .approvals
+        case "settings": return .settings
+        default: return nil
+        }
+    }
+
     var symbol: String {
         switch self {
         case .sessions: return "bolt.horizontal.circle"
         case .acceptance: return "checklist"
         case .projects: return "folder"
+        case .secrets: return "key.fill"
+        case .credentials: return "lock.fill"
         case .usage: return "chart.bar"
         case .approvals: return "checkmark.shield"
         case .settings: return "gearshape"
@@ -48,11 +71,19 @@ public struct MainWindowView: View {
     @Bindable var watchdog: SessionWatchdog
     @Bindable var closedSessions: ClosedSessionStore
     @Bindable var reaper: SessionReaper
+    @Bindable var secrets: SharedSecretStore
+    @Bindable var credentials: CredentialStore
     let channels: HookChannelMonitor
     let onJump: (String) -> Void
     let onLaunch: (Project, LaunchMode) -> Void
 
-    @State private var section: DashboardSection = .sessions
+    /// 截图脚本用 `HUB_WINDOW_SECTION` 钉死打开哪一页 ——
+    /// 没有它就只能去控制鼠标点侧栏，那在 CI 和别人机器上都不可靠。
+    @State private var section: DashboardSection = DashboardSection(
+        rawValue: ProcessInfo.processInfo.environment["HUB_WINDOW_SECTION"] ?? ""
+    ) ?? DashboardSection.fromShortName(
+        ProcessInfo.processInfo.environment["HUB_WINDOW_SECTION"]
+    ) ?? .sessions
     @State private var search = ""
     /// 当前在「验收」页看的是哪个项目。会话行的「清单」按钮会写它。
     @State private var ledgerPath: String?
@@ -71,6 +102,8 @@ public struct MainWindowView: View {
         watchdog: SessionWatchdog,
         closedSessions: ClosedSessionStore,
         reaper: SessionReaper,
+        secrets: SharedSecretStore,
+        credentials: CredentialStore,
         channels: HookChannelMonitor,
         onJump: @escaping (String) -> Void,
         onLaunch: @escaping (Project, LaunchMode) -> Void
@@ -85,6 +118,8 @@ public struct MainWindowView: View {
         self.watchdog = watchdog
         self.closedSessions = closedSessions
         self.reaper = reaper
+        self.secrets = secrets
+        self.credentials = credentials
         self.channels = channels
         self.onJump = onJump
         self.onLaunch = onLaunch
@@ -127,8 +162,12 @@ public struct MainWindowView: View {
         case .projects:
             ProjectsPane(
                 projects: projects, store: store, git: git,
-                closedSessions: closedSessions, onLaunch: onLaunch
+                closedSessions: closedSessions, secrets: secrets, onLaunch: onLaunch
             )
+        case .secrets:
+            SecretsPane(secrets: secrets, projects: projects)
+        case .credentials:
+            CredentialsPane(credentials: credentials, projects: projects)
         case .usage:
             UsagePane()
         case .approvals:
@@ -350,6 +389,7 @@ struct ProjectsPane: View {
     let store: SessionStore
     let git: GitAccountStore
     let closedSessions: ClosedSessionStore
+    let secrets: SharedSecretStore
     let onLaunch: (Project, LaunchMode) -> Void
 
     @State private var search = ""
@@ -421,7 +461,10 @@ struct ProjectsPane: View {
             isMissing: projects.isMissing(project),
             onLaunch: { onLaunch(project, $0) },
             onTogglePin: { projects.togglePin(project) },
-            onRemove: { projects.remove([project]) }
+            onRemove: { projects.remove([project]) },
+            onCopySecretPath: secrets.groups(for: project).isEmpty ? nil : {
+                Clipboard.copy(secrets.envFilePath(for: project))
+            }
         )
     }
 
@@ -1080,8 +1123,7 @@ struct SettingsPane: View {
                                     .font(.system(size: 11, design: .monospaced))
                                     .foregroundStyle(.tertiary)
                                 Button("复制命令") {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString("gh auth login", forType: .string)
+                                    Clipboard.copy("gh auth login")
                                 }
                                 .font(.system(size: 11))
                             }

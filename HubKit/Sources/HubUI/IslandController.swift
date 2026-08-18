@@ -56,6 +56,14 @@ public final class IslandController {
 
     /// 从岛上启动一个项目。由 app 层注入（要用到 TerminalDispatch）。
     public var onLaunch: ((Project, LaunchMode) -> Void)?
+    /// 问这个项目的密钥路径。**没绑定共用密钥就返回 nil**，菜单里那一项也就不出现。
+    ///
+    /// 返回 `String?` 而不是一个 `() -> Void`：出现条件必须和主窗口那边一模一样，
+    /// 而主窗口是「没绑定就不给这一项」。给一个点了没反应的菜单项，
+    /// 正是 `ProjectMenu` 注释里记着的那种漂移。
+    ///
+    /// app 层注入 —— 岛不该认识 `SharedSecretStore`。
+    public var secretPath: ((Project) -> String?)?
 
     public init(
         store: SessionStore,
@@ -221,7 +229,8 @@ public final class IslandController {
                 onReply: { [weak self] text in self?.sendReply(text) },
                 onDialogKey: { [weak self] request, key in
                     self?.pressDialogKey(request, key: key)
-                }
+                },
+                onSecretPath: secretPath
             )
         )
     }

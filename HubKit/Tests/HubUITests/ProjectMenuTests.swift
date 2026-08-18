@@ -85,4 +85,32 @@ final class ProjectMenuTests: XCTestCase {
         XCTAssertEqual(list.last??.title, "置顶")
         XCTAssertNil(list[list.count - 2], "置顶前面应该是分隔线")
     }
+
+    // MARK: - 共用密钥
+
+    /// 项目没绑共用密钥时不该有这一项 —— 点了没反应的菜单项，
+    /// 和「菜单坏了」在用户眼里是一回事。
+    func testSecretPathItemIsAbsentWhenUnbound() {
+        XCTAssertFalse(titles.contains("复制密钥路径"))
+    }
+
+    func testSecretPathItemAppearsWhenBound() {
+        let items = ProjectMenu.items(
+            isPinned: false, resumable: nil,
+            onLaunch: { _ in }, onTogglePin: {},
+            onCopySecretPath: {}
+        )
+        XCTAssertTrue(items.compactMap { $0?.title }.contains("复制密钥路径"))
+    }
+
+    /// 目录都没了就别提密钥了 —— 那一档只留「从列表移除」是刻意的，
+    /// 每多一个可点项都是在把刚修好的静默失败又造一遍。
+    func testMissingProjectStillOnlyOffersRemoval() {
+        let items = ProjectMenu.items(
+            isPinned: false, resumable: nil, isMissing: true,
+            onLaunch: { _ in }, onTogglePin: {},
+            onRemove: {}, onCopySecretPath: {}
+        )
+        XCTAssertFalse(items.compactMap { $0?.title }.contains("复制密钥路径"))
+    }
 }

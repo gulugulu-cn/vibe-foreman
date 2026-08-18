@@ -111,6 +111,12 @@ public struct HookEvent: Codable, Sendable {
 
     // MARK: hubctl 补充的环境信息
 
+    /// hubctl 本地那道密钥泄漏闸的判定结果。非 nil = **这次已经被本地拦下了**。
+    ///
+    /// 事件照发，是为了让它出现在审批日志里 —— 一道看不见的闸，
+    /// 用户第一次被拦时只会觉得 Claude 抽风。
+    public let guardFinding: String?
+
     /// `$TMUX_PANE`。在 tmux 里跑时能直接定位 pane，不用猜。
     public let tmuxPane: String?
     /// hook 进程自己的 PID，用于反查是哪个 claude 进程。
@@ -133,6 +139,7 @@ public struct HookEvent: Codable, Sendable {
         toolSummary: String? = nil,
         toolUseId: String? = nil,
         toolInputJSON: String? = nil,
+        guardFinding: String? = nil,
         tmuxPane: String? = nil,
         clientPid: Int32? = nil
     ) {
@@ -152,6 +159,7 @@ public struct HookEvent: Codable, Sendable {
         self.toolSummary = toolSummary
         self.toolUseId = toolUseId
         self.toolInputJSON = toolInputJSON
+        self.guardFinding = guardFinding
         self.tmuxPane = tmuxPane
         self.clientPid = clientPid
     }

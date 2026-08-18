@@ -50,6 +50,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 关掉终端窗口就结束会话。
     private lazy var reaper = SessionReaper(store: store, closed: closedSessions)
 
+    /// 共用密钥：一处配好，勾给项目，物化成 `~/.vibe-foreman/env/by-project/*.env`。
+    ///
+    /// 演示模式（截图用）下走临时目录：截图脚本会反复起停 app，
+    /// 让它去动真的密钥库和真的物化目录是不可接受的。
+    private let secrets = DemoFixtures.isEnabled
+        ? SharedSecretStore(url: nil, root: DemoFixtures.scratchRoot)
+        : SharedSecretStore()
+    /// 账号密码：只给人看的那一份。和上面那个**没有任何共用的存储或目录**。
+    private let credentials = DemoFixtures.isEnabled
+        ? CredentialStore(url: nil)
+        : CredentialStore()
+
     /// hook 自动安装的结果。设置页要显示 —— 一个默默失败的自动步骤
     /// 比要求用户手动跑一遍更糟。
     private var hookInstall: HookInstaller.Outcome = .alreadyCorrect
@@ -61,10 +73,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // .accessory：不在 Dock 显示图标，也不占应用切换器的位置。
         // 岛和托盘就是这个 app 的全部门面。
-        NSApp.setActivationPolicy(.accessory)
+        //
+        // 唯一的例外是截图模式：`.accessory` 的进程从后台 shell 起来时
+        // **抢不到焦点**，而 macOS 会把非活跃窗口里的系统控件去饱和 ——
+        // 截出来的图上开关全是灰的，看起来像是全都关着，正好把要展示的东西说反了。
+        // `.regular` 能自己 activate，代价只是截图那几秒 Dock 里多个图标。
+        let screenshotWindow = ProcessInfo.processInfo.environment["HUB_OPEN_WINDOW"] == "1"
+        NSApp.setActivationPolicy(screenshotWindow ? .regular : .accessory)
 
         // 必须在任何一次读取之前把合成数据写到盘上。
-        if DemoFixtures.isEnabled { DemoFixtures.materialize() }
+        if DemoFixtures.isEnabled {
+            DemoFixtures.materialize()
+            DemoFixtures.seed(secrets: secrets, credentials: credentials)
+        }
 
         // 总开关 → verifier actor。
         // 不接的话用户在设置里打开了开关，verifier 那边还是关的 —— 一个默默
@@ -99,6 +120,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         projects.startGitPolling()
         store.start()
 
+        // 启动时对一次账：补上上次崩溃/强退时漏掉的删除。
+        //
+        // 不能只在密钥页 onAppear 时对账 —— 用户解绑了一个项目、还没等写盘就
+        // 强退了 app，那份密钥会一直留在磁盘上，而他以为已经收回了。
+        // 幂等，磁盘上已经对的一个字节都不写。
+        secrets.refresh(projects: projects.projects)
+
         // 通知点击 → 精准跳回对应会话的终端 tab。
         // 这是本次重写要修的核心 bug：旧实现的 terminal-notifier 拿不到点击回调。
         notifications.onActivate = { [weak self] sessionId in
@@ -130,6 +158,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 不该要求先从菜单栏打开主窗口。
         island.onLaunch = { [weak self] project, mode in
             self?.launch(project, mode)
+        }
+
+        // 岛上的项目行右键也能拿到密钥路径。和主窗口是同一份菜单内容
+        // （`ProjectMenu`），两边不能只有一边有 —— 那正是 ProjectMenu 注释里
+        // 记着的那次漂移。
+        island.secretPath = { [weak self] project in
+            guard let self, !self.secrets.groups(for: project).isEmpty else { return nil }
+            return self.secrets.envFilePath(for: project)
         }
 
         // 滞留守望：岛原来只在事件发生那一瞬间提醒，之后再也不喊。
@@ -167,8 +203,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         observeApprovalQueue()
 
         // 截图用：主窗口平时只能从托盘菜单打开，而截图脚本没法可靠地驱动菜单。
-        if ProcessInfo.processInfo.environment["HUB_OPEN_WINDOW"] == "1" {
+        if screenshotWindow {
             openMainWindow()
+            // 再抢一次。启动那一刻发起方（终端）还是前台，第一次 activate 常常不生效。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                NSApp.activate(ignoringOtherApps: true)
+                self?.mainWindow?.makeKeyAndOrderFront(nil)
+            }
         }
 
         // 用 Logger 而不是 NSLog，且显式 `privacy: .public` —— 否则统一日志
@@ -322,6 +363,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             watchdog: watchdog,
             closedSessions: closedSessions,
             reaper: reaper,
+            secrets: secrets,
+            credentials: credentials,
             channels: hooks.channels,
             onJump: { [weak self] sessionId in
                 self?.store.jump(to: sessionId)
