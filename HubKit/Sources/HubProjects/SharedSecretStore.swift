@@ -29,6 +29,19 @@ public final class SharedSecretStore {
         }
     }
 
+    /// 密钥泄漏闸。**默认开。**
+    ///
+    /// 真正读它的是 hubctl，通过 `~/.vibe-foreman/guard.json` ——
+    /// 那个进程每次工具调用都要跑一遍，不可能去解密库里的设置。
+    /// 所以这里改完要立刻落成那个文件。
+    public var leakGuardEnabled: Bool = true {
+        didSet {
+            guard leakGuardEnabled != oldValue else { return }
+            persist()
+            writeGuardConfig()
+        }
+    }
+
     @ObservationIgnored private let file: EncryptedFile<Payload>
     @ObservationIgnored private let root: URL
     /// 上一次拿到的项目列表。物化需要项目名（拼文件名）和 key（查绑定）。
@@ -37,6 +50,8 @@ public final class SharedSecretStore {
     private struct Payload: Codable, Sendable {
         var data: SecretVaultData
         var materializeEnabled: Bool
+        /// 老版本的密文里没有这个字段，解出来当 true —— 默认开。
+        var leakGuardEnabled: Bool?
     }
 
     public nonisolated static var defaultURL: URL {
@@ -59,8 +74,12 @@ public final class SharedSecretStore {
             groups = payload.data.groups
             // 绕开 didSet：加载不是「用户改了开关」，不该触发回写和重新物化。
             _materializeEnabled = payload.materializeEnabled
+            _leakGuardEnabled = payload.leakGuardEnabled ?? true
         }
         state = file.state
+        // 启动时对一次 guard.json：用户可能手改过它，也可能上次没写成。
+        // hubctl 读的是那个文件，两边不一致的话界面上的开关就是假的。
+        writeGuardConfig()
     }
 
     // MARK: - 查
@@ -160,11 +179,30 @@ public final class SharedSecretStore {
 
     private func persist() {
         guard file.save(Payload(data: SecretVaultData(groups: groups),
-                                materializeEnabled: materializeEnabled)) else {
+                                materializeEnabled: materializeEnabled,
+                                leakGuardEnabled: leakGuardEnabled)) else {
             state = file.state
             return
         }
         state = file.state
+    }
+
+    /// 把闸的开关落成 hubctl 读得到的那个文件。
+    ///
+    /// **只在关掉时才写文件。** 默认开，而"文件不存在 = 开着"是 hubctl 那边的约定 ——
+    /// 这样一个从没打开过密钥页的用户也受保护，而且不会凭空多出一个
+    /// `~/.vibe-foreman/`（那个目录本来是只有用了共用密钥才该出现的）。
+    private func writeGuardConfig() {
+        let url = root.appendingPathComponent("guard.json")
+        guard !leakGuardEnabled else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        try? FileManager.default.createDirectory(
+            at: root, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try? Data(#"{"enabled":false}"#.utf8).write(to: url, options: .atomic)
     }
 
     private func reconcile() {

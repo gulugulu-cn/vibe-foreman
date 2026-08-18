@@ -69,6 +69,42 @@ shoot() {
   ok "$name  ←  $state"
 }
 
+# 主窗口。和岛不一样：它不是靠 HUB_ISLAND_STATE 钉形态，而是
+# HUB_OPEN_WINDOW=1 打开 + HUB_WINDOW_SECTION 钉住打开哪一页。
+#
+# 也不裁 alpha —— 主窗口是实心的，crop-alpha 会把圆角外那圈透明像素
+# 连着窗口边一起削掉。
+shoot_window() {
+  local section="$1" name="$2"
+
+  pkill -x ClaudeHub 2>/dev/null || true
+  sleep 1
+
+  HUB_DEMO=1 HUB_OPEN_WINDOW=1 HUB_WINDOW_SECTION="$section" "$APP" >/dev/null 2>&1 &
+  local pid=$!
+
+  # **按宽度挑，不能取第一个。** find-window 按面积排序，而岛的容器窗口
+  # （640×720）比主窗口（940×640）先出现一瞬 —— 取第一个就会截到岛，
+  # 而且那一张看起来像是"截图脚本坏了"，不像"截错窗口了"。
+  # 主窗口最小宽度是 780，用 900 卡住足够把两者分开。
+  local win="" tries=0
+  while [ $tries -lt 40 ]; do
+    win=$(swift "$FINDER" 2>/dev/null | awk '$2 >= 900 {print $1; exit}')
+    [ -n "$win" ] && break
+    sleep 0.5
+    tries=$((tries + 1))
+  done
+  if [ -z "$win" ]; then
+    kill "$pid" 2>/dev/null || true
+    fail "找不到主窗口（${section}）"
+  fi
+  sleep 1.5
+
+  screencapture -x -o -l"$win" "$OUT/$name" 2>/dev/null || fail "截图失败（${section}）"
+  kill "$pid" 2>/dev/null || true
+  ok "$name  ←  主窗口/$section"
+}
+
 if [ $# -gt 0 ]; then
   for s in "$@"; do
     case "$s" in
@@ -77,6 +113,9 @@ if [ $# -gt 0 ]; then
       projects) shoot projects 03-expanded-projects.png ;;
       nudge) shoot nudge 05-nudge.png ;;
       answer) shoot answer 06-answer.png ;;
+      secrets) shoot_window secrets 10-secrets.png ;;
+      credentials) shoot_window credentials 11-credentials.png ;;
+      window) shoot_window sessions 04-main-window.png ;;
       *) fail "不认识的形态：$s" ;;
     esac
   done
@@ -86,6 +125,8 @@ else
   shoot projects 03-expanded-projects.png
   shoot nudge 05-nudge.png
   shoot answer 06-answer.png
+  shoot_window secrets 10-secrets.png
+  shoot_window credentials 11-credentials.png
 fi
 
 pkill -x ClaudeHub 2>/dev/null || true

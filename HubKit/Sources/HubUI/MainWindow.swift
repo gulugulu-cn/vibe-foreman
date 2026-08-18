@@ -21,6 +21,22 @@ public enum DashboardSection: String, CaseIterable, Identifiable, Sendable {
 
     public var id: String { rawValue }
 
+    /// 给脚本用的英文短名 —— rawValue 是中文，写进 shell 脚本会很难看，
+    /// 而且 `HUB_ISLAND_STATE` 那批已有的形态名也全是英文。
+    static func fromShortName(_ name: String?) -> DashboardSection? {
+        switch name {
+        case "sessions": return .sessions
+        case "acceptance": return .acceptance
+        case "projects": return .projects
+        case "secrets": return .secrets
+        case "credentials": return .credentials
+        case "usage": return .usage
+        case "approvals": return .approvals
+        case "settings": return .settings
+        default: return nil
+        }
+    }
+
     var symbol: String {
         switch self {
         case .sessions: return "bolt.horizontal.circle"
@@ -61,7 +77,13 @@ public struct MainWindowView: View {
     let onJump: (String) -> Void
     let onLaunch: (Project, LaunchMode) -> Void
 
-    @State private var section: DashboardSection = .sessions
+    /// 截图脚本用 `HUB_WINDOW_SECTION` 钉死打开哪一页 ——
+    /// 没有它就只能去控制鼠标点侧栏，那在 CI 和别人机器上都不可靠。
+    @State private var section: DashboardSection = DashboardSection(
+        rawValue: ProcessInfo.processInfo.environment["HUB_WINDOW_SECTION"] ?? ""
+    ) ?? DashboardSection.fromShortName(
+        ProcessInfo.processInfo.environment["HUB_WINDOW_SECTION"]
+    ) ?? .sessions
     @State private var search = ""
     /// 当前在「验收」页看的是哪个项目。会话行的「清单」按钮会写它。
     @State private var ledgerPath: String?

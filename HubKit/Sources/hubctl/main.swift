@@ -40,9 +40,20 @@ private func makeEvent(kind: HookEvent.Kind, payload: [String: Any]) -> HookEven
 
     var toolSummary: String?
     var toolInputJSON: String?
+    var guardFinding: String?
     if let toolName = string(payload, "tool_name"),
        let input = payload["tool_input"] as? [String: Any] {
         toolSummary = RiskClassifier.summarize(toolName: toolName, input: input)
+
+        // 密钥泄漏闸。**本地判定，不问 app** —— 仓库其它拦截都是"app 没开就放行"，
+        // 这一条反过来：密钥漏出去是不可逆的，一次就够。
+        if kind == .preToolUse {
+            guardFinding = SecretLeakGuard.inspect(
+                toolName: toolName,
+                input: input,
+                cwd: string(payload, "cwd") ?? FileManager.default.currentDirectoryPath
+            )?.reason
+        }
 
         // 交互类工具（选择题 / 计划审批）要把完整 tool_input 带给岛上渲染。
         // 上限 256KB：socket 是单行协议（1MB 上限），一份超长 plan 不值得
@@ -71,6 +82,7 @@ private func makeEvent(kind: HookEvent.Kind, payload: [String: Any]) -> HookEven
         toolSummary: toolSummary,
         toolUseId: string(payload, "tool_use_id"),
         toolInputJSON: toolInputJSON,
+        guardFinding: guardFinding,
         // $TMUX_PANE 是 tmux 注入到每个 pane 环境里的 pane id。
         // 旧实现用 `tmux display-message -p '#W'` 且没带 -t，拿的是当前 active
         // 窗口而不是自己所在的窗口 —— 用户切个 tab 就归错项目了。读环境变量没这个问题。
@@ -143,6 +155,14 @@ private func runHook(_ name: String) -> Int32 {
 
     guard let payload = readStdin() else { return 0 }
     let event = makeEvent(kind: kind, payload: payload)
+
+    // 本地闸已经判了拦。事件照发（不等应答）—— 只为让它出现在审批日志里：
+    // 一道看不见的闸，用户第一次被拦时只会觉得 Claude 抽风。
+    if let finding = event.guardFinding {
+        _ = HubSocketClient.send(event, waitForDecision: false, timeout: HookTimeouts.clientRead)
+        emitDecision(HookDecision(verdict: .deny, reason: finding))
+        return 0
+    }
 
     let result = HubSocketClient.send(
         event,

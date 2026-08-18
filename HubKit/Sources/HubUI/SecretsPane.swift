@@ -17,6 +17,10 @@ struct SecretsPane: View {
     /// 哪几个项目把「给 AI 的话」展开着。key 是 `Project.id`。
     @State private var promptShown: Set<String> = []
 
+    private var sortedGroups: [SecretGroup] {
+        secrets.groups.sorted { $0.name < $1.name }
+    }
+
     private var selectedGroup: SecretGroup? {
         secrets.groups.first { $0.id == selection }
     }
@@ -37,7 +41,12 @@ struct SecretsPane: View {
             Divider()
             materializationBar
         }
-        .onAppear { secrets.refresh(projects: projects.projects) }
+        .onAppear {
+            secrets.refresh(projects: projects.projects)
+            // 有组却什么都不选，右边是一大片空白 —— 那是"还没建组"的样子，
+            // 而不是"有四组等你挑"的样子。
+            if selection == nil { selection = sortedGroups.first?.id }
+        }
         .onChange(of: projects.projects) { _, new in secrets.refresh(projects: new) }
     }
 
@@ -46,7 +55,7 @@ struct SecretsPane: View {
     private var groupList: some View {
         VStack(spacing: 0) {
             List(selection: $selection) {
-                ForEach(secrets.groups.sorted { $0.name < $1.name }) { group in
+                ForEach(sortedGroups) { group in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(group.name).font(.system(size: 12, weight: .medium))
                         Text("\(group.entries.count) 条 · \(group.projectKeys.count) 个项目")
@@ -293,6 +302,18 @@ struct SecretsPane: View {
                 .font(.system(size: 11))
                 // 关掉之后磁盘上就真的一份明文都没有了 —— 权威副本是加密的。
                 .help("关掉之后 ~/.vibe-foreman/env 会被清空，AI 就读不到任何东西了")
+
+            Toggle("拦住密钥外泄", isOn: $secrets.leakGuardEnabled)
+                .toggleStyle(.switch)
+                .font(.system(size: 11))
+                // 这道闸跑在 hubctl 本地，不依赖 app 在不在跑 ——
+                // 别的拦截都是「app 没开就放行」，这一条反过来，
+                // 因为密钥漏出去是不可逆的。
+                .help("""
+                AI 要把真实密钥值写进文件、内联进命令，\
+                或者 git add/commit 会把 .env 一类的文件带进仓库时，直接拒绝。
+                默认开，被拦的每一次都会进审批日志。
+                """)
 
             if let copied {
                 Label(copied, systemImage: "checkmark.circle.fill")

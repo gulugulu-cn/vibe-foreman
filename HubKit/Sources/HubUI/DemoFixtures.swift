@@ -105,6 +105,55 @@ public enum DemoFixtures {
         root.appendingPathComponent("projects.yaml")
     }
 
+    /// 截图用的密钥和账号。**全是编的**，而且刻意编得一眼假 ——
+    /// 这批图是要发出去的，一个像真的 token 混进去，读者会去试。
+    @MainActor
+    public static func seed(secrets: SharedSecretStore, credentials: CredentialStore) {
+        let feishu = secrets.addGroup(name: "IM 开放平台", note: "自建应用，团队共用")
+        secrets.addEntry(to: feishu.id, key: "IM_APP_ID",
+                         value: "cli_demo_0000000000", note: "应用 ID")
+        secrets.addEntry(to: feishu.id, key: "IM_APP_SECRET", value: "demo-secret-not-real-0000")
+
+        let erp = secrets.addGroup(name: "ERP 开放接口")
+        secrets.addEntry(to: erp.id, key: "ERP_ACCESS_KEY", value: "demo-access-key-0000")
+        secrets.addEntry(to: erp.id, key: "ERP_ACCESS_SECRET", value: "demo-access-secret-0000")
+
+        let llm = secrets.addGroup(name: "模型服务")
+        secrets.addEntry(to: llm.id, key: "OPENAI_API_KEY", value: "sk-demo-0000000000000000")
+
+        let objectStorage = secrets.addGroup(name: "对象存储")
+        secrets.addEntry(to: objectStorage.id, key: "OSS_BUCKET", value: "demo-assets")
+        secrets.addEntry(to: objectStorage.id, key: "OSS_KEY_ID", value: "demo-oss-key-0000")
+
+        // 路径必须和 demoProjects 落到磁盘上的那批一致，否则勾选状态和
+        // 账号归属都对不上 —— 界面上会显示成"一个项目都没绑"。
+        func demoProject(_ name: String) -> Project {
+            Project(name: name, path: workspaceRoot.appendingPathComponent(name).path)
+        }
+        for project in [demoProject("storefront"), demoProject("api-gateway")] {
+            secrets.setBinding(groupID: feishu.id, project: project, bound: true)
+            secrets.setBinding(groupID: erp.id, project: project, bound: true)
+        }
+        secrets.setBinding(groupID: llm.id, project: demoProject("api-gateway"), bound: true)
+
+        let store = ProjectKey.key(for: demoProject("storefront"))
+        credentials.upsert(
+            Credential(projectKey: store, env: .production, label: "运营后台",
+                       username: "ops@example.com", url: "https://admin.example.com"),
+            password: "demo-not-a-real-password"
+        )
+        credentials.upsert(
+            Credential(projectKey: store, env: .local, label: "本地 MySQL",
+                       username: "root", note: "docker-compose 起的那个"),
+            password: "demo-local-only"
+        )
+        credentials.upsert(
+            Credential(projectKey: store, env: .staging, label: "预发环境",
+                       username: "qa@example.com", url: "https://staging.example.com"),
+            password: "demo-staging"
+        )
+    }
+
     /// 演示模式下密钥物化的落点。
     ///
     /// 截图脚本会反复起停 app，绝不能让它去动真的 `~/.vibe-foreman` ——

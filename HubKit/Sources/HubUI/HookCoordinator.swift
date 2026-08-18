@@ -577,6 +577,25 @@ public final class HookCoordinator {
     /// 用信号量阻塞是正确做法的场景：调用方本来就是一条专用的连接线程，
     /// 它的全部职责就是等这个结果。
     private nonisolated func handlePreToolUseSynchronously(_ event: HookEvent) -> HookDecision {
+        // hubctl 那道本地密钥闸已经拦下了，这里只负责让它**看得见**。
+        //
+        // 它不等我们的决策就直接拒了（密钥漏出去不可逆，不能依赖 app 在不在跑），
+        // 所以这条连接上没人在等应答。但一道看不见的闸，用户第一次被拦时
+        // 只会觉得 Claude 抽风 —— 所以必须进审批日志。
+        if let finding = event.guardFinding {
+            Task { @MainActor in
+                let project = self.projects.projectName(forPath: event.cwd)
+                    ?? event.fallbackProjectName
+                self.approvals.recordSecretGuardBlock(
+                    projectName: project,
+                    toolName: event.toolName ?? "?",
+                    command: event.toolSummary ?? "",
+                    reason: finding
+                )
+            }
+            return HookDecision(verdict: .deny, reason: finding)
+        }
+
         // 交互类工具（选择题 / 计划审批）在 risk 判定之前分流：它们的
         // tool_input 里没有 command / path，走风险链路会被判成 normal
         // 直接放行 —— 岛上什么都不弹，这正是要修的 bug。

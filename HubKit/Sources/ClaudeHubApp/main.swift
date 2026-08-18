@@ -73,10 +73,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // .accessory：不在 Dock 显示图标，也不占应用切换器的位置。
         // 岛和托盘就是这个 app 的全部门面。
-        NSApp.setActivationPolicy(.accessory)
+        //
+        // 唯一的例外是截图模式：`.accessory` 的进程从后台 shell 起来时
+        // **抢不到焦点**，而 macOS 会把非活跃窗口里的系统控件去饱和 ——
+        // 截出来的图上开关全是灰的，看起来像是全都关着，正好把要展示的东西说反了。
+        // `.regular` 能自己 activate，代价只是截图那几秒 Dock 里多个图标。
+        let screenshotWindow = ProcessInfo.processInfo.environment["HUB_OPEN_WINDOW"] == "1"
+        NSApp.setActivationPolicy(screenshotWindow ? .regular : .accessory)
 
         // 必须在任何一次读取之前把合成数据写到盘上。
-        if DemoFixtures.isEnabled { DemoFixtures.materialize() }
+        if DemoFixtures.isEnabled {
+            DemoFixtures.materialize()
+            DemoFixtures.seed(secrets: secrets, credentials: credentials)
+        }
 
         // 总开关 → verifier actor。
         // 不接的话用户在设置里打开了开关，verifier 那边还是关的 —— 一个默默
@@ -194,8 +203,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         observeApprovalQueue()
 
         // 截图用：主窗口平时只能从托盘菜单打开，而截图脚本没法可靠地驱动菜单。
-        if ProcessInfo.processInfo.environment["HUB_OPEN_WINDOW"] == "1" {
+        if screenshotWindow {
             openMainWindow()
+            // 再抢一次。启动那一刻发起方（终端）还是前台，第一次 activate 常常不生效。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                NSApp.activate(ignoringOtherApps: true)
+                self?.mainWindow?.makeKeyAndOrderFront(nil)
+            }
         }
 
         // 用 Logger 而不是 NSLog，且显式 `privacy: .public` —— 否则统一日志
