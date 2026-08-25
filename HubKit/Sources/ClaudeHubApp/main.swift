@@ -188,6 +188,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 五类原因的区分恰恰是要展示的东西。
         let screenshotMode = DemoFixtures.isEnabled
             && ProcessInfo.processInfo.environment["HUB_ISLAND_STATE"] != nil
+        raiseFileDescriptorLimit()
+
         if !screenshotMode { stalls.start() }
 
         // 盯梢本身没开销（没开着的项目直接跳过），但它会往终端注入文字 ——
@@ -409,9 +411,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let resumeId { closedSessions.forget(sessionId: resumeId) }
 
         // AppleScript + tmux 有跨进程成本，别卡住 UI。
+        let notifications = self.notifications
         Task.detached(priority: .userInitiated) {
-            dispatch.open(project: name, path: path, mode: mode, sessionId: resumeId)
+            let ok = dispatch.open(project: name, path: path, mode: mode, sessionId: resumeId)
+            guard !ok else { return }
+            // **失败必须说出来。**
+            //
+            // 这个返回值原先是丢掉的（`open` 标了 @discardableResult），
+            // 于是"启动失败"在界面上和"启动成功"长得一模一样 ——
+            // 用户只看到点了没反应，而磁盘上也查不到原因。
+            // 一个静默失败的按钮和一个坏掉的按钮无法区分，
+            // 这正是 MainWindow 里那条注释已经写过的教训。
+            await MainActor.run {
+                notifications.post(
+                    title: "打不开 \(name)",
+                    body: "详情见 launch.log（~/Library/Application Support/claude-hub/）",
+                    sessionId: "launch.\(name)",
+                    distinctBy: "\(Date().timeIntervalSince1970)"
+                )
+            }
         }
+    }
+
+    /// 把 fd 软上限抬到硬上限。
+    ///
+    /// GUI app 从 launchd 继承的 `RLIMIT_NOFILE` 软上限是 **256** —— 低到
+    /// 这个 app 平时就在贴着跑（实测占用冲到过 251）。撞顶之后
+    /// `Process.run()` 抛 EMFILE，所有 tmux 探测同时开始返回"没有答案"，
+    /// 而下游把"没有答案"读成了确定的结论：session 不存在、终端已关。
+    ///
+    /// 终端里永远复现不出来 —— shell 的 rc 早把软上限抬上去了，
+    /// `swift test` 跑在那个环境里，一切正常。
+    private func raiseFileDescriptorLimit() {
+        var limit = rlimit()
+        guard getrlimit(RLIMIT_NOFILE, &limit) == 0 else { return }
+        // rlim_max 常常是 RLIM_INFINITY（0x7fffffffffffffff），直接用会溢出，
+        // 而且也没必要 —— 8192 对这个 app 绰绰有余。
+        let target = min(limit.rlim_max, rlim_t(8192))
+        guard target > limit.rlim_cur else { return }
+        let before = limit.rlim_cur
+        limit.rlim_cur = target
+        guard setrlimit(RLIMIT_NOFILE, &limit) == 0 else { return }
+        TerminalDispatch.traceLine("fd 上限 \(before) → \(target)")
     }
 }
 

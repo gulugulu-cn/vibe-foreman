@@ -35,7 +35,7 @@ public final class SessionReaper {
     public var enabled: Bool = true {
         didSet {
             guard enabled != oldValue else { return }
-            if !enabled { strikes.removeAll() }
+            if !enabled { strikes.removeAll(); firstSeen.removeAll() }
             persist()
         }
     }
@@ -53,6 +53,17 @@ public final class SessionReaper {
 
     /// sessionId → 连续几轮观察到"没客户端连着"。
     @ObservationIgnored private var strikes: [String: Int] = [:]
+
+    /// sessionId → 回收器**第一次看见**它的时间。
+    ///
+    /// 用来给 `startedAt` 缺失的会话兜一个宽限期。`startedAt` 来自 hook 上报
+    /// （`AgentSession.swift`），而一个刚开出来、还没说过话的会话可能压根
+    /// 没上报过这个字段 —— 于是 `isOldEnough` 直接判"够久"，
+    /// **最该被保护的新窗口反而是唯一没有宽限期的那一类**。
+    ///
+    /// 拿"第一次见到"当锚点能同时保住两头：早就在跑的老会话第一眼就已经
+    /// 超期（见 `apply` 里的回填），该收照收；刚冒出来的新会话则从现在起算。
+    @ObservationIgnored private var firstSeen: [String: Date] = [:]
 
     /// 连续几轮才动手。一轮就杀的话，用户 detach 一下再连回来
     ///（换窗口、iTerm 重启恢复会话）都会被当成关掉了。
@@ -98,15 +109,27 @@ public final class SessionReaper {
         let snapshot = store.sessions
         guard !snapshot.isEmpty else {
             strikes.removeAll()
+            firstSeen.removeAll()
             return
         }
 
         Task.detached(priority: .utility) { [weak self] in
             let probe = TmuxProbe()
+            // **问不出来就这一轮什么都不做。**
+            //
+            // nil = `tmux list-clients` 没跑起来或超时（fd 撞顶时成批发生）。
+            // 早先这里拿到的是空集，含义变成「所有会话都没终端连着」，
+            // 回收器于是把用户刚点开的项目当场杀掉 —— 而新窗口没有
+            // transcript，不进名册，杀完不留痕迹，表现就是"点了没反应"。
+            //
+            // 注意是 return 而不是把 strikes 清零：清零会让"终端真的关了"
+            // 这件事每被探测失败打断一次就重新计数，回收器对该收的那批
+            // 永远凑不够 needStrikes。不知道的时候，账本原样留着就好。
+            guard let attached = probe.attachedSessionNames() else { return }
             let pairs = DetachedSessions.pairs(
                 sessions: snapshot,
                 panes: probe.listPanes(),
-                attached: probe.attachedSessionNames(),
+                attached: attached,
                 tree: ProcessTree.snapshot()
             )
             await MainActor.run { self?.apply(pairs, now: Date()) }
@@ -123,10 +146,16 @@ public final class SessionReaper {
         // 不清的话「detach 一下再连回来」几次就会攒够次数，
         // 然后在一个连着终端的会话上动手。
         strikes = strikes.filter { detached[$0.key] != nil }
+        firstSeen = firstSeen.filter { detached[$0.key] != nil }
 
         var reaped: [ClosedSession] = []
         for (sessionId, pair) in detached {
-            guard Self.isOldEnough(pair.session, now: now, grace: launchGrace) else {
+            // 第一次见到就记一笔，作为 startedAt 缺失时的宽限期锚点。
+            let seen = firstSeen[sessionId] ?? now
+            if firstSeen[sessionId] == nil { firstSeen[sessionId] = now }
+            guard Self.isOldEnough(
+                pair.session, now: now, grace: launchGrace, firstSeen: seen
+            ) else {
                 // 宽限期内不计数：计到一半等宽限期一过就立刻够数，
                 // 等于宽限期形同虚设。
                 strikes[sessionId] = 0
@@ -183,12 +212,25 @@ public final class SessionReaper {
         reader.locate(cwd: cwd, sessionId: sessionId) != nil
     }
 
-    /// 起来够久了吗。`startedAt` 缺失时**当成够久** ——
-    /// 缺字段的会话通常是早就在跑的老会话，把它无限期豁免反而会让
-    /// 回收器对最该收的那批永远不动手。
-    static func isOldEnough(_ session: AgentSession, now: Date, grace: TimeInterval) -> Bool {
-        guard let started = session.startedAt else { return true }
-        return now.timeIntervalSince(started) >= grace
+    /// 起来够久了吗。
+    ///
+    /// 优先用 `startedAt`。它缺失时退到 `firstSeen`（回收器第一次看见这个
+    /// 会话的时刻）—— 而不是像早先那样直接判"够久"。
+    ///
+    /// 直接判"够久"的问题：`startedAt` 来自 hook 上报，一个刚开出来、
+    /// 还没说过话的会话往往还没有这个字段，于是**新窗口成了唯一没有
+    /// 宽限期的一类**，最容易被误杀，表现正是"点了没反应"。
+    ///
+    /// 而 `firstSeen` 对早就在跑的老会话没有副作用：app 一启动就会看见它们，
+    /// 90 秒后就照常进入可回收状态。
+    static func isOldEnough(
+        _ session: AgentSession,
+        now: Date,
+        grace: TimeInterval,
+        firstSeen: Date = .distantPast
+    ) -> Bool {
+        let anchor = session.startedAt ?? firstSeen
+        return now.timeIntervalSince(anchor) >= grace
     }
 
     /// 杀 pane，不是杀 window。

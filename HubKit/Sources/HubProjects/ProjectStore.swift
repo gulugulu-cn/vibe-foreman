@@ -264,11 +264,26 @@ public final class ProjectStore {
         gitTimer = nil
     }
 
+    /// 上一轮 git 采集还在跑吗。见 `refreshGit` 里的说明。
+    @ObservationIgnored private var refreshingGit = false
+
     public func refreshGit() {
         let paths = projects.map(\.expandedPath)
         guard !paths.isEmpty else { return }
 
-        // 21 个仓库串行大约 120ms。放后台队列，别让 UI 掉帧。
+        // **上一轮没跑完就跳过这一轮。**
+        //
+        // 定时器是每 6 秒无条件触发的，而这里是串行遍历所有项目。
+        // 注释里"21 个仓库约 120ms"的前提早就不成立了 —— 实测已经 40 个仓库，
+        // 一轮跑不完下一轮就叠上来，`Task.detached` 无限累积。
+        // 每个 `Shell.run` 要占 4 个 fd，而 GUI app 从 launchd 继承的
+        // fd 软上限只有 256：实测这个进程的 fd 占用能冲到 251。
+        // 撞顶之后所有探测同时开始"没有答案"，那才是真正伤人的地方
+        //（见 `Shell.Result` 和 `TmuxProbe.attachedSessionNames` 的注释）。
+        guard !refreshingGit else { return }
+        refreshingGit = true
+
+        // 40 个仓库串行。放后台队列，别让 UI 掉帧。
         Task.detached(priority: .utility) {
             var collected: [String: GitInfo] = [:]
             for path in paths {
@@ -278,6 +293,7 @@ public final class ProjectStore {
             }
             await MainActor.run { [collected] in
                 self.gitInfo = collected
+                self.refreshingGit = false
             }
         }
     }

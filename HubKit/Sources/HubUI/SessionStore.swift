@@ -162,16 +162,21 @@ public final class SessionStore {
 
         Task.detached(priority: .utility) { [weak self] in
             let probe = TmuxProbe()
-            let ids = Self.detachedIds(
-                sessions: snapshot,
-                panes: probe.listPanes(),
-                attached: probe.attachedSessionNames(),
-                tree: ProcessTree.snapshot()
-            )
+            // 探测失败（nil）就沿用上一轮的判定，别把"不知道"画成
+            // "终端已关" —— 那会让一批正常会话集体闪成灰的，
+            // 而且和回收器的判据必须是同一份（见 `DetachedSessions`）。
+            let ids = probe.attachedSessionNames().map { attached in
+                Self.detachedIds(
+                    sessions: snapshot,
+                    panes: probe.listPanes(),
+                    attached: attached,
+                    tree: ProcessTree.snapshot()
+                )
+            }
             await MainActor.run {
                 guard let self else { return }
-                if self.detachedSessionIds != ids { self.detachedSessionIds = ids }
-                self.lastDetachedResolve = Date()
+                if let ids, self.detachedSessionIds != ids { self.detachedSessionIds = ids }
+                if ids != nil { self.lastDetachedResolve = Date() }
                 self.resolvingDetached = false
             }
         }
@@ -325,7 +330,9 @@ public final class SessionStore {
         let probe = TmuxProbe()
         let panes = probe.bindPanes(to: pids, tree: tree)
         if !panes.isEmpty {
-            let attached = probe.attachedSessionNames()
+            // 问不出来时按"有连着"处理：标签只是显示，宁可少说一句
+            // "终端已关"，也不要在探测抖动时给一堆正常会话贴错标。
+            let attached = probe.attachedSessionNames() ?? Set(panes.values.map(\.sessionName))
             let sessionIdByPid = Dictionary(
                 sessions.map { ($0.pid, $0.sessionId) }, uniquingKeysWith: { a, _ in a }
             )
