@@ -90,6 +90,13 @@ cp "${BUILD_DIR}/ClaudeHub" "${APP_PATH}/Contents/MacOS/ClaudeHub"
 # 和主程序共用 bundle identifier 会被 exec 瞬间 SIGKILL。
 cp "${BUILD_DIR}/hubctl" "${APP_PATH}/Contents/Helpers/hubctl"
 
+# scripts/ 一并打进 Resources/，和 build-swift-app.sh 保持一致。
+# dmg 用户**根本没有仓库** —— 不带上这份的话 locateScript 三个仓库候选
+# 全落空，ensure-project-config.sh 静默跳过，防污染 deny 一条不补（issue #2）。
+mkdir -p "${APP_PATH}/Contents/Resources/scripts"
+cp "${HUB_DIR}/scripts/"*.sh "${APP_PATH}/Contents/Resources/scripts/"
+chmod +x "${APP_PATH}/Contents/Resources/scripts/"*.sh
+
 [ -f "${HUB_DIR}/Resources/AppIcon.icns" ] \
   && cp "${HUB_DIR}/Resources/AppIcon.icns" "${APP_PATH}/Contents/Resources/AppIcon.icns"
 
