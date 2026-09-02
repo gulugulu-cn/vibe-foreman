@@ -395,6 +395,8 @@ struct ProjectsPane: View {
     @State private var search = ""
     @State private var showNewProject = false
     @State private var showClone = false
+    /// 「添加目录」没能落盘时的说明。nil = 不弹。
+    @State private var addFailureMessage: String?
 
     private var filtered: [Project] {
         let base: [Project]
@@ -448,7 +450,16 @@ struct ProjectsPane: View {
             fileURLWithPath: NSString(string: "~/Documents/code").expandingTildeInPath
         )
         guard panel.runModal() == .OK else { return }
-        for url in panel.urls { projects.addExisting(path: url.path) }
+        // **失败必须说出来。** 这里曾经把返回值整个丢掉：全新安装时
+        // projects.yaml 还不存在，写入静默落空，用户看到的是
+        // "点了确认、列表毫无变化、没有任何提示"（issue #1）。
+        let failed = panel.urls.filter { !projects.addExisting(path: $0.path) }
+        guard !failed.isEmpty else { return }
+        let target = (projects.sourceURL ?? projects.writeTargetURL)?.path
+            ?? "（找不到 projects.yaml）"
+        addFailureMessage = "这些目录没能加进清单："
+            + failed.map(\.lastPathComponent).joined(separator: "、")
+            + "。\n\n可能已经在清单里，或者数据文件写入失败。\n当前数据文件：\(target)"
     }
 
     /// 这一行的菜单内容。▶ 按钮和右键共用。
@@ -642,6 +653,17 @@ struct ProjectsPane: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)
             }
+        }
+        .alert(
+            "没能添加目录",
+            isPresented: Binding(
+                get: { addFailureMessage != nil },
+                set: { if !$0 { addFailureMessage = nil } }
+            )
+        ) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(addFailureMessage ?? "")
         }
     }
 

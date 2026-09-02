@@ -51,10 +51,11 @@ final class SessionReaperTests: XCTestCase {
         XCTAssertTrue(SessionReaper.isOldEnough(old, now: now, grace: 90))
     }
 
-    /// `startedAt` 缺失时**当成够久**。
+    /// `startedAt` 缺失、又没有"第一次见到"的锚点时，**当成够久**。
     ///
-    /// 缺字段的通常是早就在跑的老会话。反过来豁免的话，回收器会对最该收的
+    /// 缺字段的通常是早就在跑的老会话。反过来无条件豁免的话，回收器会对最该收的
     /// 那批永远不动手 —— 一个永远不生效的开关比没有开关更糟。
+    /// 新会话怎么保护见下面 `testMissingStartTimeFallsBackToFirstSeen`。
     func testMissingStartTimeCountsAsOldEnough() {
         XCTAssertTrue(
             SessionReaper.isOldEnough(session("s1", pid: 100), now: Date(), grace: 90)
@@ -179,6 +180,49 @@ final class SessionReaperTests: XCTestCase {
     }
 
     private func store() -> ClosedSessionStore { ClosedSessionStore(url: nil) }
+
+    // MARK: - startedAt 缺失时的宽限期兜底
+
+    /// **`startedAt` 缺失的新会话必须也有宽限期。**
+    ///
+    /// `startedAt` 来自 hook 上报，一个刚开出来、还没说过话的会话往往
+    /// 压根没有这个字段。早先的实现直接判"够久"，于是**最该被保护的
+    /// 新窗口反而成了唯一没有宽限期的一类** —— 用户刚点开的项目
+    /// 30 秒后被回收器杀掉，而新窗口没有 transcript、不进名册，
+    /// 杀完不留任何痕迹，表现就是"点了没反应"。
+    func testMissingStartTimeFallsBackToFirstSeen() {
+        let now = Date()
+        let fresh = session("s1", pid: 100)   // startedAt = nil
+        XCTAssertFalse(
+            SessionReaper.isOldEnough(
+                fresh, now: now, grace: 90, firstSeen: now.addingTimeInterval(-5)
+            ),
+            "刚被看见 5 秒的会话不许动"
+        )
+    }
+
+    /// 兜底不能把老会话永久豁免掉：app 一启动就看见它们，90 秒后照常可回收。
+    func testFirstSeenLongAgoIsEligible() {
+        let now = Date()
+        let old = session("s1", pid: 100)
+        XCTAssertTrue(
+            SessionReaper.isOldEnough(
+                old, now: now, grace: 90, firstSeen: now.addingTimeInterval(-600)
+            )
+        )
+    }
+
+    /// `startedAt` 在的时候以它为准，firstSeen 不该把它顶掉。
+    func testStartedAtWinsOverFirstSeen() {
+        let now = Date()
+        let old = session("s1", pid: 100, startedAt: now.addingTimeInterval(-600))
+        XCTAssertTrue(
+            SessionReaper.isOldEnough(
+                old, now: now, grace: 90, firstSeen: now.addingTimeInterval(-1)
+            ),
+            "已知起始时间是 10 分钟前，不该因为刚被看见就免死"
+        )
+    }
 }
 
 /// 被结束掉的会话名册。

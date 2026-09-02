@@ -85,11 +85,26 @@ public struct TmuxProbe: Sendable {
     /// 用户看到的是「1 个会话」亮着蓝点，而他明明已经把窗口关了。
     ///
     /// tmux server 没跑时返回空集合（不是错误）。
-    public func attachedSessionNames() -> Set<String> {
+    ///
+    /// **探测失败返回 nil，不是空集。**
+    ///
+    /// 空集在下游（`DetachedSessions.pairs`）的含义是「所有会话都没终端连着」，
+    /// 而那是 `SessionReaper` 动手杀 pane 的判据。也就是说，早先这里的
+    /// `guard result.succeeded else { return [] }` 把**一次探测失败翻译成了
+    /// 一道杀窗口的命令** —— fd 撞顶时 `tmux list-clients` 跑不起来，
+    /// 回收器就会去杀用户刚点开的项目。而刚开的窗口还没有 transcript，
+    /// 按 `SessionReaper.apply` 的规则不进名册，于是杀完**不留任何痕迹**：
+    /// 用户看到的就是"点了没反应"。
+    ///
+    /// nil = 不知道。不知道的时候谁都不许动手。
+    public func attachedSessionNames() -> Set<String>? {
         let result = Shell.run(
             tmuxPath, ["list-clients", "-F", "#{client_session}"], timeout: 3
         )
-        guard result.succeeded else { return [] }
+        // 跑起来了、也没被超时打断，才算 tmux 真的表了态。
+        // server 没跑时 tmux 返回非 0 + "no server running"，那是**有效答案**：
+        // 确实一个客户端都没有。
+        guard result.answered else { return nil }
         return Set(
             result.stdout
                 .split(separator: "\n")
