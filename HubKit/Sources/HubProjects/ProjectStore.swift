@@ -107,6 +107,14 @@ public final class ProjectStore {
         return urls
     }
 
+    /// 新条目往哪儿写。
+    ///
+    /// 没有任何已知文件时回落到 **Application Support**（候选表的最后一项，
+    /// app 自己的数据目录），而不是 `candidateURLs.first` —— 那是
+    /// 「仓库大概克隆在 ~/Documents/code 下」的假设，仓库放在别处时
+    /// 那个目录根本不存在，写入会静默落空（issue #1）。
+    public var writeTargetURL: URL? { sourceURL ?? candidateURLs.last }
+
     public func load() {
         loadDiagnostic = nil
 
@@ -213,11 +221,13 @@ public final class ProjectStore {
         guard !projects.contains(where: { normalize($0.expandedPath) == path }) else {
             return false
         }
-        guard let url = sourceURL ?? candidateURLs.first else { return false }
+        guard let url = writeTargetURL else { return false }
 
         let trimmed = rawName?.trimmingCharacters(in: .whitespaces) ?? ""
         let name = trimmed.isEmpty ? (path as NSString).lastPathComponent : trimmed
-        Self.append(entries: [(name, path)], to: url)
+        // 如实上报 —— 这里曾经无条件返回 true，append 一个字都没写
+        // 也照样谎报成功，UI 层拿不到任何失败信号（issue #1）。
+        guard Self.append(entries: [(name, path)], to: url) else { return false }
         load()
         return true
     }
@@ -320,8 +330,7 @@ public final class ProjectStore {
     /// 扫描目录树，把新发现的 git 仓库追加进 yaml。
     public func scan(root: String = "~/Documents/code") {
         guard !isScanning else { return }
-        let target = sourceURL ?? candidateURLs.first
-        guard let target else { return }
+        guard let target = writeTargetURL else { return }
         isScanning = true
 
         let existing = Set(projects.map { self.normalize($0.expandedPath) })
@@ -349,20 +358,50 @@ public final class ProjectStore {
     /// 文件里是 `projects: []`（旧版写的空数组），追加逻辑直接 seek 到文件尾
     /// 写条目，产出的 YAML 变成"空数组标记后面跟着 117 条内容" ——
     /// 解析器看到 `[]` 就认定项目段是空的，全部忽略。
-    nonisolated static func append(paths: [String], to url: URL) {
+    @discardableResult
+    nonisolated static func append(paths: [String], to url: URL) -> Bool {
         append(entries: paths.map { (($0 as NSString).lastPathComponent, $0) }, to: url)
     }
 
-    nonisolated static func append(entries: [(name: String, path: String)], to url: URL) {
-        guard !entries.isEmpty,
-              var text = try? String(contentsOf: url, encoding: .utf8) else { return }
+    /// 返回是否**真的落盘了**。
+    ///
+    /// 早先这里读不到文件就直接 return：全新安装时一份 yaml 都还没有，
+    /// 于是「添加目录」「扫描」全部静默失败，看起来像按钮是坏的（issue #1）。
+    /// 现在文件不存在就建父目录 + 写出骨架；写没写成，调用方必须能知道。
+    @discardableResult
+    nonisolated static func append(entries: [(name: String, path: String)], to url: URL) -> Bool {
+        guard !entries.isEmpty else { return false }
+
+        var text: String
+        if let existing = try? String(contentsOf: url, encoding: .utf8) {
+            text = existing
+        } else {
+            text = "projects:\n"
+            guard (try? FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )) != nil else { return false }
+        }
 
         text = normalizeProjectsKey(in: text)
+        text = ensureProjectsKey(in: text)
         if !text.hasSuffix("\n") { text += "\n" }
         for entry in entries {
             text += "  - name: \(entry.name)\n    path: \(entry.path)\n"
         }
-        try? text.write(to: url, atomically: true, encoding: .utf8)
+        return (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil
+    }
+
+    /// 文件里连顶格 `projects:` 键都没有时补一个到末尾 ——
+    /// 不补的话追加的条目是没有父键的孤儿，解析器整段忽略。
+    nonisolated static func ensureProjectsKey(in text: String) -> String {
+        let hasKey = text.components(separatedBy: "\n").contains { line in
+            !line.hasPrefix(" ") && !line.hasPrefix("\t")
+                && line.trimmingCharacters(in: .whitespaces).hasPrefix("projects:")
+        }
+        guard !hasKey else { return text }
+        var result = text
+        if !result.isEmpty, !result.hasSuffix("\n") { result += "\n" }
+        return result + "projects:\n"
     }
 
     /// 把 `projects: []` / `projects: ~` / `projects: null` 还原成 `projects:`，

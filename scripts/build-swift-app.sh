@@ -76,6 +76,14 @@ cp "$BUILD_DIR/ClaudeHub" "${APP_PATH}/Contents/MacOS/ClaudeHub"
 mkdir -p "${APP_PATH}/Contents/Helpers"
 cp "$BUILD_DIR/hubctl" "${APP_PATH}/Contents/Helpers/hubctl"
 
+# scripts/ 一并打进 Resources/：locateScript 优先用这份。
+# 不打进去的话，仓库克隆在 ~/Documents/code 之外（或 dmg 安装、根本没有仓库）
+# 时 ensure-project-config.sh 三个写死的候选全落空，界面开的项目
+# 一个都不会被补防污染 deny —— 而且是静默的（issue #2）。
+mkdir -p "${APP_PATH}/Contents/Resources/scripts"
+cp "${HUB_DIR}/scripts/"*.sh "${APP_PATH}/Contents/Resources/scripts/"
+chmod +x "${APP_PATH}/Contents/Resources/scripts/"*.sh
+
 if [ -f "${HUB_DIR}/Resources/AppIcon.icns" ]; then
   cp "${HUB_DIR}/Resources/AppIcon.icns" "${APP_PATH}/Contents/Resources/AppIcon.icns"
 fi

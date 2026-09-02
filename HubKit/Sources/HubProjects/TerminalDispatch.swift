@@ -283,8 +283,16 @@ public struct TerminalDispatch: Sendable {
     /// 脚本自己是幂等的、也自己兜底不阻断，所以这里失败了什么都不用做 ——
     /// 让项目起不来的代价远大于少一次配置检查。
     private func ensureProjectConfig(_ path: String) {
-        guard let script = Self.locateScript("ensure-project-config.sh") else { return }
-        _ = Shell.run("/bin/bash", [script, path], timeout: 10)
+        guard let script = Self.locateScript("ensure-project-config.sh") else {
+            // **跳过必须被看见。** 这一步是"界面开的项目也有防污染 deny"
+            // 唯一的保险，静默跳过时用户会一直以为 deny 生效了（issue #2）。
+            Self.trace("ensure-project-config.sh 没找到，配置检查被跳过（deny/hook 不会补齐）")
+            return
+        }
+        let result = Shell.run("/bin/bash", [script, path], timeout: 10)
+        if !result.succeeded {
+            Self.trace("ensure-project-config.sh 非零退出：\(result.diagnostic)")
+        }
     }
 
     /// 找 hub 的脚本目录。
@@ -292,16 +300,41 @@ public struct TerminalDispatch: Sendable {
     /// **不能靠 PATH 或相对路径**：Hub 是 GUI app，从 launchd 起，
     /// 工作目录和 PATH 都不是终端里那一套（`StallJudge.locateClaude` 同理）。
     static func locateScript(_ name: String) -> String? {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let candidates = [
+        scriptCandidates(name)
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// 候选表。纯函数，测试盯着它别再退化成只认 `~/Documents/code`。
+    ///
+    /// 早先只有下面三个写死的仓库路径：仓库克隆在别处、或者根本没有仓库
+    /// （dmg 安装）时全部落空，`ensureProjectConfig` 静默跳过（issue #2）。
+    /// 所以 build-swift-app.sh 现在把 scripts/ 打进 .app 的
+    /// Contents/Resources/ —— bundle 里这份跟二进制一起走，排在仓库猜测
+    /// 之前；`CLAUDE_HUB_DIR` 是显式指定，优先级最高（开发者改脚本时
+    /// 不该被 bundle 里编译时冻结的那份挡住）。
+    static func scriptCandidates(
+        _ name: String,
+        home: String = FileManager.default.homeDirectoryForCurrentUser.path,
+        bundleResourceURL: URL? = Bundle.main.resourceURL,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String] {
+        var candidates: [String] = []
+        if let dir = environment["CLAUDE_HUB_DIR"], !dir.isEmpty {
+            candidates.append(NSString(string: dir).expandingTildeInPath + "/scripts/\(name)")
+        }
+        if let bundleResourceURL {
+            candidates.append(
+                bundleResourceURL.appendingPathComponent("scripts/\(name)").path
+            )
+        }
+        candidates += [
             // 仓库改过名（claude-hub → vibe-foreman），两个都要认：
-            // 老用户的工作区还叫旧名，新 clone 的是新名。少认一个的表现是
-            // "从界面开项目时项目配置没被补齐"，而那是**静默的**。
+            // 老用户的工作区还叫旧名，新 clone 的是新名。
             "\(home)/Documents/code/vibe-foreman/scripts/\(name)",
             "\(home)/Documents/code/claude-hub/scripts/\(name)",
             "\(home)/.local/share/claude-hub/scripts/\(name)",
         ]
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+        return candidates
     }
 
     /// hub session 在不在。**三态，因为探测本身会失败。**
