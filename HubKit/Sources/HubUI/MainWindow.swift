@@ -66,6 +66,7 @@ public struct MainWindowView: View {
     @Bindable var approvals: ApprovalCoordinator
     @Bindable var placement: IslandPlacementStore
     @Bindable var acceptance: AcceptanceStore
+    @Bindable var rounds: RoundStore
     @Bindable var verifierSettings: VerifierSettings
     let verifier: AcceptanceVerifier
     @Bindable var watchdog: SessionWatchdog
@@ -97,6 +98,7 @@ public struct MainWindowView: View {
         approvals: ApprovalCoordinator,
         placement: IslandPlacementStore,
         acceptance: AcceptanceStore,
+        rounds: RoundStore,
         verifierSettings: VerifierSettings,
         verifier: AcceptanceVerifier,
         watchdog: SessionWatchdog,
@@ -113,6 +115,7 @@ public struct MainWindowView: View {
         self.approvals = approvals
         self.placement = placement
         self.acceptance = acceptance
+        self.rounds = rounds
         self.verifierSettings = verifierSettings
         self.verifier = verifier
         self.watchdog = watchdog
@@ -157,7 +160,7 @@ public struct MainWindowView: View {
             AcceptancePane(
                 acceptance: acceptance, projects: projects, store: store,
                 settings: verifierSettings, verifier: verifier,
-                watchdog: watchdog, selection: $ledgerPath
+                watchdog: watchdog, rounds: rounds, selection: $ledgerPath
             )
         case .projects:
             ProjectsPane(

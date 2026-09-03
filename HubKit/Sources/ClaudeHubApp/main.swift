@@ -371,6 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             approvals: approvals,
             placement: placement,
             acceptance: acceptance,
+            rounds: rounds,
             verifierSettings: verifierSettings,
             verifier: verifier,
             watchdog: watchdog,
