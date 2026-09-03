@@ -158,6 +158,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.watchdog.isWatching(projectPath) ?? false
         }
         hooks.start()
+        // 14 天没动静的验收条目自动归档 —— 条目只进不出，清单就会从仪表
+        // 变成几百条的债务（实机 496 条就是这么攒出来的）。归档可恢复。
+        acceptance.archiveStale()
         // 清掉发起方已经死了的审批卡，见 ApprovalCoordinator.startOrphanSweep()。
         approvals.startOrphanSweep()
         prompts.startOrphanSweep()

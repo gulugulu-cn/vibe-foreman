@@ -132,6 +132,12 @@ public final class RoundStore {
         logs[projectPath]?.rounds ?? []
     }
 
+    /// 某会话当前未收口的轮。要点入库时靠它把条目挂到轮上。
+    public func openRoundId(sessionId: String, projectPath: String) -> String? {
+        logs[projectPath]?.rounds
+            .first { $0.sessionId == sessionId && $0.endedAt == nil }?.id
+    }
+
     public func remove(ids: Set<String>, in projectPath: String) {
         guard !ids.isEmpty else { return }
         mutate(projectPath) { log in

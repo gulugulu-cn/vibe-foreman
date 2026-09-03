@@ -126,7 +126,7 @@ public final class SessionWatchdog {
     /// 存疑的排最前：那一档是「它自报做完了、但真实 diff 里找不到」，
     /// 是整个清单里最该当面对质的。
     public func generatedProbes(for projectPath: String) -> [String] {
-        let items = acceptance.ledger(for: projectPath).items
+        let items = acceptance.ledger(for: projectPath).activeItems
             .filter { $0.needsAttention && !$0.likelyMisextracted }
             .sorted { left, _ in left.status == .disputed }
 
@@ -231,7 +231,7 @@ public final class SessionWatchdog {
     ///
     /// 只在它答完一轮实质内容时调（短回复和冷却期内都跳过），其余走清单。
     private func schedulePlanning(sessionId: String, projectPath: String, reply: String) {
-        let pending = acceptance.ledger(for: projectPath).items
+        let pending = acceptance.ledger(for: projectPath).activeItems
             .filter(\.needsAttention).map(\.text)
         let history = asked[sessionId] ?? []
         let planner = self.planner

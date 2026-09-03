@@ -366,7 +366,7 @@ public final class HookCoordinator {
     private func scheduleAudit(projectPath: String, sessionId: String) {
         guard !auditing.contains(projectPath) else { return }
 
-        let items = acceptance.ledger(for: projectPath).items
+        let items = acceptance.ledger(for: projectPath).activeItems
             .filter { $0.status == .claimed && !$0.isSettledByUser }
         guard !items.isEmpty else { return }
 
@@ -428,7 +428,7 @@ public final class HookCoordinator {
 
         // 本轮相关的参考条目：这个会话动过、还没定论的。可空 —— 没条目时
         // 分析只产 recap，时间轴节点照样有内容。
-        let subjects = acceptance.ledger(for: projectPath).items
+        let subjects = acceptance.ledger(for: projectPath).activeItems
             .filter { $0.needsAttention && $0.sourceSessionId == round.sessionId }
             .map {
                 AuditSubject(
@@ -627,6 +627,12 @@ public final class HookCoordinator {
 
         extracting.insert(projectPath)
         let extractor = self.extractor
+        // 这批要点归到哪个会话/轮：取最后一句原话的会话。少了 sourceSessionId
+        // 的话，轮次分析按会话过滤 subjects 永远是空的（真踩过）。
+        let sessionId = prompts.last?.sessionId
+        let roundId = sessionId.flatMap {
+            rounds.openRoundId(sessionId: $0, projectPath: projectPath)
+        }
 
         Task.detached(priority: .utility) {
             // 在后台线程读 HEAD：它要 fork 一个 git 进程，别占着 MainActor。
@@ -656,10 +662,12 @@ public final class HookCoordinator {
                             text: $0.text,
                             acceptance: $0.acceptance,
                             origin: $0.inferred ? .inferred : (plan != nil ? .plan : .userPrompt),
+                            sourceSessionId: sessionId,
                             // 入库这一刻的 HEAD 就是这条要点的 diff 起点。
                             // 少了它，复核时无从回答"这条要点之后代码变了什么"，
                             // 只能拿整个仓库历史去比，噪音大到没法用。
-                            baselineCommit: baseline
+                            baselineCommit: baseline,
+                            roundId: roundId
                         )
                     },
                     into: projectPath

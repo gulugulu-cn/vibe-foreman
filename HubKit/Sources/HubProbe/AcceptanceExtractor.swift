@@ -193,14 +193,20 @@ public actor AcceptanceExtractor {
         规则：
         1. 拆的是**用户要的功能**，不是实现步骤。「移动端能正常翻页」是要点，\
         「重写轮播组件」不是 —— 后者是怎么做，会随实现方案变，不能当验收标准。
-        2. 已有的要点不要重复输出，只输出新增的。语义相同就算重复。
-        3. 每条尽量给一个可验证的验收条件。**能给可执行命令就给命令**\
+        2. **以下一律不要输出**（它们不是可验收的功能点，进了清单只会淹掉\
+        真正该验的）：发布/部署/打包备忘（"审计通过前不发布"）、编码风格或\
+        流程约定（"保持独立提交、不 squash"、"以后都要 X"）、一次性操作指令\
+        （"重启一下"、"把这个删了"、"PR 保持 Draft"）、对过去工作的评论。\
+        只输出**这一轮要开发、且能对着代码或界面验收**的功能点。
+        3. 已有的要点不要重复输出，只输出新增的。语义相同就算重复。
+        4. 每条尽量给一个可验证的验收条件。**能给可执行命令就给命令**\
         （`swift test --filter XxxTests`、`npm run build`），给不出来就写一句\
         人怎么确认（"打开设置页能看到开关"）。
-        4. 允许补充用户没明说但必然要做的隐含项（改了接口就得同步调用方、\
-        新功能要配测试），这类把 inferred 设成 true。**别过度发挥**，\
-        隐含项最多 2 条。
-        5. 没有任何新要点就输出空数组，不要硬凑。
+        5. 允许补充用户没明说但必然要做的隐含项（改了接口就得同步调用方），\
+        这类把 inferred 设成 true。**别过度发挥**，隐含项最多 1 条，\
+        没有就不输出。
+        6. 没有任何新要点就输出空数组，不要硬凑。一次最多 5 条，\
+        多于 5 条时只留最重要的 5 条。
 
         只输出一个 JSON 对象：
         {"points":[{"text":"要点≤40字","acceptance":"验收条件或命令，没有就填空串",\
@@ -211,12 +217,15 @@ public actor AcceptanceExtractor {
     }
 
     /// nil = 没解析出 `points` 这个结构（视为失败）；`[]` = 模型明确说没有新要点。
+    ///
+    /// **上限必须在这边再截一次**（prefix(5)），不能指望模型守约 ——
+    /// 一次对话灌几十条正是清单爆到 496 条的形状。
     static func parse(_ raw: String) -> [ExtractedPoint]? {
         guard let dict = ModelOutput.extractJSONObject(raw),
               let raw = dict["points"] as? [[String: Any]]
         else { return nil }
 
-        return raw.compactMap { item in
+        return raw.prefix(5).compactMap { item in
             guard let text = (item["text"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty
             else { return nil }
