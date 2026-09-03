@@ -27,6 +27,10 @@ public final class HookCoordinator {
     private let dedup = HookDedup()
     private let extractor = AcceptanceExtractor()
     private let auditor = AcceptanceAuditor()
+    /// 观察者分析：Stop 后在后台对照「说了什么 vs 实际改了什么」，落进时间轴。
+    private let analyzer = RoundAnalyzer()
+    /// 正在分析中的项目。同一个项目不并发跑，纪律同 `auditing`。
+    private var analyzing: Set<String> = []
     /// 读 Claude 自己的 todo（`~/.claude/tasks/`）。零成本，不调模型。
     private let tasks = TaskStateReader()
     /// 正在复核中的项目。同一个项目不并发跑，理由同 `extracting`。
@@ -229,12 +233,14 @@ public final class HookCoordinator {
         // 收口本轮（观察者记录，只做内存/JSON 操作，不 fork git）。
         // deny 分支不走到这里 —— 被拦下的那一轮 Claude 马上还要续跑，没结束。
         let touched = acceptance.touchedFiles(sessionId: event.sessionId)
-        rounds.closeRound(
+        if let round = rounds.closeRound(
             sessionId: event.sessionId, projectPath: path,
             touchedFileCount: touched.count,
             hadRealChanges: !touched.isEmpty,
             assistantSummary: Self.summarize(event.lastAssistantMessage, limit: 200)
-        )
+        ) {
+            scheduleRoundAnalysis(round, touchedFiles: touched)
+        }
         // 下一轮的 touched 从零开始 —— 不清的话每一轮都带着整个会话的累积，
         // 「本轮改了几个文件」这个数字就没有意义了。
         acceptance.clearTouchedFiles(sessionId: event.sessionId)
@@ -408,6 +414,93 @@ public final class HookCoordinator {
                 """)
             }
         }
+    }
+
+    /// Stop 后的观察者分析。**纯旁路**：detached 后台跑，绝不进 Stop 的同步桥。
+    ///
+    /// 门槛：有实改才调模型。touchedFiles 非空是第一判据（免 fork）；
+    /// 为空时后台再查一次真实 git diff 兜底 —— Claude 可能用 Bash 改文件，
+    /// PostToolUse 抓不到。纯问答轮只留收口时的轻量记录，不烧模型。
+    @MainActor
+    private func scheduleRoundAnalysis(_ round: RoundRecord, touchedFiles: [String]) {
+        let projectPath = round.projectPath
+        guard !analyzing.contains(projectPath) else { return }
+
+        // 本轮相关的参考条目：这个会话动过、还没定论的。可空 —— 没条目时
+        // 分析只产 recap，时间轴节点照样有内容。
+        let subjects = acceptance.ledger(for: projectPath).items
+            .filter { $0.needsAttention && $0.sourceSessionId == round.sessionId }
+            .map {
+                AuditSubject(
+                    id: $0.id, text: $0.text, acceptance: $0.acceptance,
+                    claimed: round.assistantSummary ?? "（没说）"
+                )
+            }
+
+        analyzing.insert(projectPath)
+        let analyzer = self.analyzer
+
+        Task.detached(priority: .utility) {
+            let since = round.baselineCommit
+            // 门槛兜底：Hub 没看到被改文件时查一次真实 diff 再决定 ——
+            // 真没改动就是纯问答轮，收口时的轻量记录已经够了。
+            if touchedFiles.isEmpty, GitDiff.summary(projectPath, since: since).isEmpty {
+                await MainActor.run { _ = self.analyzing.remove(projectPath) }
+                return
+            }
+
+            let analysis = await analyzer.analyze(RoundAnalysisInput(
+                promptSummary: round.promptSummary,
+                assistantMessage: round.assistantSummary,
+                subjects: subjects,
+                cwd: projectPath,
+                since: since,
+                touchedFiles: touchedFiles
+            ))
+            let diffStat = Self.diffStatLine(cwd: projectPath, since: since)
+
+            await MainActor.run {
+                self.analyzing.remove(projectPath)
+                // nil = 这次没跑成。什么都别改（纪律同 scheduleAudit）。
+                guard let analysis else { return }
+
+                self.rounds.applyAnalysis(
+                    roundId: round.id, in: projectPath,
+                    recap: analysis.recap,
+                    verdicts: analysis.results.map { result in
+                        RoundVerdict(
+                            itemId: result.id, confirmed: result.confirmed, note: result.note,
+                            evidence: Self.evidence(for: result, cwd: projectPath, since: since)
+                        )
+                    },
+                    diffStat: diffStat
+                )
+
+                // 只把 confirmed=true 同步进参考清单（open → confirmed，带 diff 证据）。
+                // false 的**不**回写 —— 观察者视角下「这轮没做到」不等于
+                // 「自报做完但找不到」，把从未自报的条目打成存疑是冤枉。
+                let proven = analysis.results.filter(\.confirmed)
+                guard !proven.isEmpty else { return }
+                self.acceptance.applyAudit(
+                    proven.map { result in
+                        AcceptanceVerdict(
+                            id: result.id, confirmed: true, note: result.note,
+                            evidence: Self.evidence(for: result, cwd: projectPath, since: since)
+                        )
+                    },
+                    in: projectPath
+                )
+            }
+        }
+    }
+
+    /// diff 的一行摘要（"3 个文件 +120/-45"）。行数来自 git numstat，不经模型。
+    private nonisolated static func diffStatLine(cwd: String, since: String?) -> String? {
+        let changes = GitDiff.numstat(cwd, since: since)
+        guard !changes.isEmpty else { return nil }
+        let added = changes.reduce(0) { $0 + $1.added }
+        let removed = changes.reduce(0) { $0 + $1.removed }
+        return "\(changes.count) 个文件 +\(added)/-\(removed)"
     }
 
     /// 把复核认定的文件换算成带行数的证据。

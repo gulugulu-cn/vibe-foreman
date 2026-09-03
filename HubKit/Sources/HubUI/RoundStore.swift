@@ -119,6 +119,9 @@ public final class RoundStore {
             log.rounds[index].recap = recap
             log.rounds[index].verdicts = verdicts
             if let diffStat { log.rounds[index].diffStat = diffStat }
+            // 分析只在有实改的轮上跑 —— Claude 用 Bash 改文件时 PostToolUse
+            // 抓不到，收口时误记成"纯问答"，门槛兜底查到实改后在这里纠正。
+            log.rounds[index].hadRealChanges = true
         }
     }
 

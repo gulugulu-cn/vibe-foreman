@@ -128,6 +128,22 @@ final class RoundStoreTests: XCTestCase {
         XCTAssertEqual(round?.diffStat, "2 个文件 +40/-3")
     }
 
+    /// 分析只在有实改的轮上跑 —— 结果落回来时把 hadRealChanges 补正为 true。
+    /// （Claude 用 Bash 改文件时 PostToolUse 抓不到，收口时会误记成"纯问答"，
+    /// 门槛兜底的 git diff 查到实改后由这里纠正。）
+    func testApplyAnalysisUpgradesHadRealChanges() {
+        let store = RoundStore(directory: nil)
+        let id = store.beginRound(sessionId: "s1", projectPath: project, prompt: "x")
+        _ = store.closeRound(
+            sessionId: "s1", projectPath: project,
+            touchedFileCount: 0, hadRealChanges: false, assistantSummary: nil
+        )
+
+        store.applyAnalysis(roundId: id, in: project, recap: "用 Bash 改的", verdicts: [], diffStat: "1 个文件 +5/-0")
+
+        XCTAssertEqual(store.rounds(for: project).first?.hadRealChanges, true)
+    }
+
     /// 轮已经被删/滚掉时补写静默忽略，不炸也不复活。
     func testApplyAnalysisOnRemovedRoundIsIgnored() {
         let store = RoundStore(directory: nil)
