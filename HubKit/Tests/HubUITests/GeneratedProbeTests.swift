@@ -103,7 +103,11 @@ final class GeneratedProbeTests: XCTestCase {
     func testMisextractedItemsAreNotAsked() {
         let acceptance = AcceptanceStore(directory: nil)
         acceptance.add(AcceptanceItem(text: "这条拆错了", origin: .userPrompt), to: project)
-        for _ in 0..<3 { _ = acceptance.injectionText(for: project) }
+        for _ in 0..<3 {
+            acceptance.markAsked(
+                ids: acceptance.injectionPayload(for: project)?.itemIds ?? [], in: project
+            )
+        }
 
         let watchdog = SessionWatchdog(
             store: SessionStore(), projects: ProjectStore(yamlURL: nil, pinURL: nil),

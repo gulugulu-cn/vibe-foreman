@@ -43,6 +43,19 @@ public final class HookCoordinator {
     /// 轮询要 90 秒才确认，而 Hook 在收工那一刻就知道。
     public var onSessionStopped: ((String, String, String?) -> Void)?
 
+    /// 这个项目允不允许**干预会话**（Stop 时把验收清单注入回去逼它核对）。
+    ///
+    /// nil 或返回 false = 纯观察。main.swift 把它接到盯梢开关
+    /// （`watchdog.isWatching`）—— 一个开关管住所有对会话的干预。
+    ///
+    /// 用闭包注入而不是直接引用 SessionWatchdog：两个模块保持解耦
+    /// （接线模式同 `onSessionStopped`），测试也不用起一个 watchdog。
+    ///
+    /// 这个口子的来历是一次实机事故：注入链路上没有任何开关，盯梢关着
+    /// 也照样把 3 条清单 + 「另有 114 条未列出」塞进一个 50 分钟的会话，
+    /// Claude 被无关任务的核对要求带偏主线。
+    public var isInterventionEnabled: ((_ projectPath: String) -> Bool)?
+
     /// 闯入防轰炸：记录每个会话上次闯入的时间。
     ///
     /// 9 个会话同时收工的时候这条至关重要 —— 不限流的话岛会连续膨胀九次，
@@ -227,22 +240,33 @@ public final class HookCoordinator {
         return decision
     }
 
-    /// 该不该拦这一次收工。
+    /// 该不该拦这一次收工。internal 供测试直接驱动（构造真事件太重）。
     @MainActor
-    private func interceptDecision(for event: HookEvent, projectPath: String) -> HookDecision {
+    func interceptDecision(for event: HookEvent, projectPath: String) -> HookDecision {
         // Claude 已经因为 Stop hook 在续跑了 —— 绝不能再拦。
         //
         // 这是**第二道**。真正的保证是下面 disarmAndShouldIntercept 里的上膛机制，
         // 因为这个字段在本机没验证过，不同 CLI 版本给不给都不确定。
         guard event.stopHookActive != true else { return .allow }
 
+        // 盯梢关着 = 纯观察，绝不注入。膛照卸（防死循环是结构性的），
+        // 但不走 disarmAndShouldIntercept —— 那条路会烧冷却时间戳，
+        // 用户一打开盯梢反而 15 分钟拦不了。
+        guard isInterventionEnabled?(projectPath) == true else {
+            acceptance.disarm(sessionId: event.sessionId)
+            return .allow
+        }
+
         guard acceptance.disarmAndShouldIntercept(
             sessionId: event.sessionId, projectPath: projectPath
         ) else { return .allow }
 
-        guard let text = acceptance.injectionText(for: projectPath) else { return .allow }
+        guard let payload = acceptance.injectionPayload(for: projectPath) else { return .allow }
 
-        return HookDecision(verdict: .deny, reason: text)
+        // 真拦下来了才记「问过一次」—— askCount 是轮换和 likelyMisextracted
+        // 的依据，虚增会让误拆判据失真。
+        acceptance.markAsked(ids: payload.itemIds, in: projectPath)
+        return HookDecision(verdict: .deny, reason: payload.text)
     }
 
     /// 把 Claude 自己列的 todo 并进清单。

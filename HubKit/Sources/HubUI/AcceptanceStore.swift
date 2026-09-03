@@ -101,6 +101,15 @@ public final class AcceptanceStore {
         return true
     }
 
+    /// 只卸膛，不做任何别的判断、不碰冷却时间戳。
+    ///
+    /// 给「盯梢关着」的收工用：膛必须照卸（防死循环是结构性的，不因开关而变），
+    /// 但纯观察的那些收工不许烧 `lastInterceptAt` —— 否则用户一打开盯梢，
+    /// 前 15 分钟一次都拦不了，开关看起来是坏的。
+    public func disarm(sessionId: String) {
+        armedSessions.remove(sessionId)
+    }
+
     /// 只读地看一眼有没有上膛。给测试和排障用，不改状态。
     public func isArmed(sessionId: String) -> Bool { armedSessions.contains(sessionId) }
 
@@ -362,7 +371,22 @@ public final class AcceptanceStore {
     ///   不这么说的话它会拿自己的 TodoWrite 来对照，那就白做了；
     /// - 结尾要求"输出完就停下"—— 否则它会顺手去补做遗漏项，
     ///   自查回答反而收不到（这个降级可以接受，但不该是默认行为）。
+    /// 注入正文 + 这一轮点到名的条目。
+    ///
+    /// **纯读。** 「问过一次」的记账在 `markAsked` —— 由调用方在**确认真的
+    /// 拦下来**之后才记。早先计数写在这里面，「算了一次文本但最终没拦」
+    /// （stopHookActive、盯梢关着）也在虚增 askCount，
+    /// likelyMisextracted 的判据整个失真。
+    public struct InjectionPayload: Sendable {
+        public let text: String
+        public let itemIds: Set<String>
+    }
+
     public func injectionText(for projectPath: String) -> String? {
+        injectionPayload(for: projectPath)?.text
+    }
+
+    public func injectionPayload(for projectPath: String) -> InjectionPayload? {
         // 问过 3 次还是「没做」的排除掉：多半不是它偷懒，是这条拆错了。
         // 继续问只会一轮轮浪费，还把真正该问的挤出去。
         let pending = ledger(for: projectPath).items
@@ -389,15 +413,6 @@ public final class AcceptanceStore {
         }
         let shown = Array(ordered.prefix(cap))
 
-        // 记下这一轮问了谁。没有这一步，上面的轮换排序就没有依据。
-        let asked = Set(shown.map(\.id))
-        mutate(projectPath) { ledger in
-            for index in ledger.items.indices where asked.contains(ledger.items[index].id) {
-                ledger.items[index].lastAskedAt = Date()
-                ledger.items[index].askCount += 1
-            }
-        }
-
         var lines = shown.map { item -> String in
             let condition = item.acceptance.map { "（验收条件：\($0)）" } ?? ""
             return "- [\(item.id)] \(item.text)\(condition)"
@@ -407,7 +422,7 @@ public final class AcceptanceStore {
             lines.append("（另有 \(ordered.count - cap) 条未列出，这轮先核对上面这些）")
         }
 
-        return """
+        let text = """
         【Vibe Foreman 验收守望】以下要点来自**用户的原始需求和已批准的计划**，\
         不是你自己列的 todo。逐条核对，给结论和证据。
 
@@ -420,6 +435,19 @@ public final class AcceptanceStore {
         done 只在**代码里真有对应改动**时才填 true。没做就填 false 并说明原因，\
         不要编造证据 —— 这份回答会拿真实的 git diff 复核。
         """
+        return InjectionPayload(text: text, itemIds: Set(shown.map(\.id)))
+    }
+
+    /// 记下「这一轮真的问了谁」。轮换排序和 likelyMisextracted 都以它为依据，
+    /// 所以只能由调用方在**确认拦下来之后**调，别在算文本时顺手记。
+    public func markAsked(ids: Set<String>, in projectPath: String) {
+        guard !ids.isEmpty else { return }
+        mutate(projectPath) { ledger in
+            for index in ledger.items.indices where ids.contains(ledger.items[index].id) {
+                ledger.items[index].lastAskedAt = Date()
+                ledger.items[index].askCount += 1
+            }
+        }
     }
 
     // MARK: - 导出归档

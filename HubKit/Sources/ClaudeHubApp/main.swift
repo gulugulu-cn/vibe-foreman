@@ -149,6 +149,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 sessionId: sessionId, projectPath: projectPath, reply: reply
             )
         }
+        // 「验收守望」注入同样归盯梢开关管 —— 一个开关管住所有对会话的干预。
+        // 不接这一句的话注入就是无开关的（那正是这次要修的实机事故）。
+        hooks.isInterventionEnabled = { [weak self] projectPath in
+            self?.watchdog.isWatching(projectPath) ?? false
+        }
         hooks.start()
         // 清掉发起方已经死了的审批卡，见 ApprovalCoordinator.startOrphanSweep()。
         approvals.startOrphanSweep()

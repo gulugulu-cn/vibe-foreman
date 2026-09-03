@@ -215,7 +215,13 @@ public struct AcceptanceItem: Codable, Sendable, Identifiable, Equatable {
     /// 问过好几次它都说没做 —— 多半不是它偷懒，是这条要点本身拆错了。
     ///
     /// 继续问下去只会一轮轮浪费，还把真正该问的挤出去。标出来让用户去处理。
-    public var likelyMisextracted: Bool { askCount >= 3 && status == .open }
+    ///
+    /// **disputed 必须包含在内。** 早先只认 `.open`，而 disputed 在注入排序里
+    /// 永远最优先 —— 一条误拆的 disputed 条目会每轮霸占槽位、askCount 无上限
+    /// 地涨、永远退不出去（实机被问到第 5 次，Claude 在证据里直接抱怨）。
+    public var likelyMisextracted: Bool {
+        askCount >= 3 && (status == .open || status == .disputed)
+    }
 
     /// 把一条塞了好几件事的要点拆开。
     ///

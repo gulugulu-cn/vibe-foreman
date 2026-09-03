@@ -30,9 +30,17 @@ public final class HubNotificationCenter: NSObject, UNUserNotificationCenterDele
 
     private var authorized = false
 
-    public override init() {
+    /// - Parameter connectToSystem: false = 不接系统通知中心。测试用 ——
+    ///   xctest 进程没有 app bundle，`UNUserNotificationCenter.current()`
+    ///   在 init 里就会直接 crash（bundleProxyForCurrentProcess is nil）。
+    public init(connectToSystem: Bool) {
         super.init()
+        guard connectToSystem else { return }
         UNUserNotificationCenter.current().delegate = self
+    }
+
+    public override convenience init() {
+        self.init(connectToSystem: true)
     }
 
     public func requestAuthorization() {

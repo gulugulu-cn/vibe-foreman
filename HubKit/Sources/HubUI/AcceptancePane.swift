@@ -241,7 +241,9 @@ struct AcceptancePane: View {
             let recent = watchdog.lastNudge(for: path)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
-                    Toggle("盯梢：停了就追问", isOn: Binding(
+                    // 一个开关管住**所有**对会话的干预：Stop 时的收工核对注入
+                    // + 停了之后的 tmux 追问。关着 = hub 纯观察，绝不打扰会话。
+                    Toggle("盯梢：干预会话（收工核对 + 停了追问）", isOn: Binding(
                         get: { on },
                         set: { watchdog.setWatching($0, path) }
                     ))
