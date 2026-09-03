@@ -18,14 +18,17 @@ final class HookInterventionGateTests: XCTestCase {
 
     private let project = "/tmp/gate-project"
 
-    private func makeCoordinator(acceptance: AcceptanceStore) -> HookCoordinator {
+    private func makeCoordinator(
+        acceptance: AcceptanceStore, rounds: RoundStore = RoundStore(directory: nil)
+    ) -> HookCoordinator {
         HookCoordinator(
             store: SessionStore(),
             approvals: ApprovalCoordinator(logURL: nil),
             prompts: AgentPromptCoordinator(),
             notifications: HubNotificationCenter(connectToSystem: false),
             projects: ProjectStore(yamlURL: nil, pinURL: nil),
-            acceptance: acceptance
+            acceptance: acceptance,
+            rounds: rounds
         )
     }
 
@@ -92,6 +95,42 @@ final class HookInterventionGateTests: XCTestCase {
             acceptance.ledger(for: project).items.first?.askCount, 1,
             "真拦下来了才算「问过一次」"
         )
+    }
+
+    // MARK: - 轮次接线（观察者时间轴的数据管道）
+
+    /// 用户说一句 → Claude 收工 = 时间轴上一轮。
+    func testUserPromptThenStopRecordsOneRound() {
+        let acceptance = AcceptanceStore(directory: nil)
+        let rounds = RoundStore(directory: nil)
+        let hooks = makeCoordinator(acceptance: acceptance, rounds: rounds)
+
+        hooks.handleUserPrompt(HookEvent(
+            kind: .userPromptSubmit, requestId: "r1", sessionId: "s1",
+            cwd: project, promptText: "做一个深色模式"
+        ))
+        _ = hooks.handleStop(stopEvent())
+
+        let round = rounds.rounds(for: project).first
+        XCTAssertEqual(round?.promptSummary, "做一个深色模式")
+        XCTAssertNotNil(round?.endedAt, "Stop 要收口本轮")
+    }
+
+    /// 被拦下（deny）的那一轮 Claude 马上要续跑 —— 不许收口。
+    func testInterceptedStopDoesNotCloseTheRound() {
+        let acceptance = armedStoreWithPending()
+        let rounds = RoundStore(directory: nil)
+        let hooks = makeCoordinator(acceptance: acceptance, rounds: rounds)
+        hooks.isInterventionEnabled = { _ in true }
+
+        hooks.handleUserPrompt(HookEvent(
+            kind: .userPromptSubmit, requestId: "r1", sessionId: "s1",
+            cwd: project, promptText: "做点什么"
+        ))
+        let decision = hooks.handleStop(stopEvent())
+
+        XCTAssertEqual(decision.verdict, .deny)
+        XCTAssertNil(rounds.rounds(for: project).first?.endedAt, "被拦的轮还没结束")
     }
 
     /// stopHookActive（Claude 已在续跑）永远优先于开关 —— 防重入不许被绕过。

@@ -27,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let notifications = HubNotificationCenter()
     private let placement = IslandPlacementStore()
     private let acceptance = AcceptanceStore()
+    /// 轮次时间轴：一轮 = 用户敲回车到 Claude 收工，观察者视角落盘。
+    private let rounds = RoundStore()
     private let verifierSettings = VerifierSettings()
     /// 唯一会执行命令的组件。默认关着，由 `verifierSettings` 驱动。
     private let verifier = AcceptanceVerifier()
@@ -41,7 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private lazy var hooks = HookCoordinator(
         store: store, approvals: approvals, prompts: prompts,
-        notifications: notifications, projects: projects, acceptance: acceptance
+        notifications: notifications, projects: projects, acceptance: acceptance,
+        rounds: rounds
     )
     private lazy var dispatch = TerminalDispatch()
     private lazy var stalls = StallWatcher(store: store)

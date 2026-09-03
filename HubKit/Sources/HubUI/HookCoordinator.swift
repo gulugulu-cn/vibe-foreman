@@ -16,6 +16,8 @@ public final class HookCoordinator {
     private let notifications: HubNotificationCenter
     private let projects: ProjectStore
     private let acceptance: AcceptanceStore
+    /// 轮次时间轴：一轮 = UserPromptSubmit → Stop。观察者视角，只记录不打扰。
+    private let rounds: RoundStore
     private var server: HubSocketServer?
 
     /// 每类 hook 最后一次收到事件的时间。设置页用它显示通道健康度 ——
@@ -71,7 +73,8 @@ public final class HookCoordinator {
         prompts: AgentPromptCoordinator,
         notifications: HubNotificationCenter,
         projects: ProjectStore,
-        acceptance: AcceptanceStore
+        acceptance: AcceptanceStore,
+        rounds: RoundStore
     ) {
         self.store = store
         self.approvals = approvals
@@ -79,6 +82,7 @@ public final class HookCoordinator {
         self.notifications = notifications
         self.projects = projects
         self.acceptance = acceptance
+        self.rounds = rounds
     }
 
     public func start() {
@@ -190,7 +194,8 @@ public final class HookCoordinator {
     }
 
     @MainActor
-    private func handleStop(_ event: HookEvent) -> HookDecision {
+    /// internal 供测试直接驱动（同 `interceptDecision`）。
+    func handleStop(_ event: HookEvent) -> HookDecision {
         store.refresh()
 
         let path = AcceptanceStore.projectPath(forCWD: event.cwd, projects: projects)
@@ -220,6 +225,19 @@ public final class HookCoordinator {
             HubLog.app.notice("验收守望：拦下 \(title, privacy: .public) 的收工，要求逐条核对")
             return decision
         }
+
+        // 收口本轮（观察者记录，只做内存/JSON 操作，不 fork git）。
+        // deny 分支不走到这里 —— 被拦下的那一轮 Claude 马上还要续跑，没结束。
+        let touched = acceptance.touchedFiles(sessionId: event.sessionId)
+        rounds.closeRound(
+            sessionId: event.sessionId, projectPath: path,
+            touchedFileCount: touched.count,
+            hadRealChanges: !touched.isEmpty,
+            assistantSummary: Self.summarize(event.lastAssistantMessage, limit: 200)
+        )
+        // 下一轮的 touched 从零开始 —— 不清的话每一轮都带着整个会话的累积，
+        // 「本轮改了几个文件」这个数字就没有意义了。
+        acceptance.clearTouchedFiles(sessionId: event.sessionId)
 
         // 收工事件立刻告诉盯梢。**这是「反应力」的关键**：
         // 轮询那条路要 45 秒一轮 × 连续两次确认 = 最少 90 秒才会追问，
@@ -458,7 +476,7 @@ public final class HookCoordinator {
     /// 拆解是异步的：它要花几秒到几十秒，绝不能挡在这里。等 Claude 干完活
     /// （通常几分钟），拆解早就完成了。
     @MainActor
-    private func handleUserPrompt(_ event: HookEvent) {
+    func handleUserPrompt(_ event: HookEvent) {
         acceptance.arm(sessionId: event.sessionId)
 
         guard let text = event.promptText?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -469,6 +487,19 @@ public final class HookCoordinator {
         acceptance.recordPrompt(
             RawPrompt(text: text, sessionId: event.sessionId), in: path
         )
+
+        // 开轮（或并入未收口的轮）。baseline 要 fork git，绝不能挡在这条 hook 里 ——
+        // 先开轮，HEAD 由后台拿到后补写。
+        let roundId = rounds.beginRound(
+            sessionId: event.sessionId, projectPath: path, prompt: text
+        )
+        Task.detached(priority: .utility) {
+            guard let head = GitDiff.head(path) else { return }
+            await MainActor.run {
+                self.rounds.setBaseline(roundId: roundId, in: path, commit: head)
+            }
+        }
+
         scheduleExtraction(projectPath: path, plan: nil)
     }
 
@@ -745,13 +776,15 @@ public final class HookCoordinator {
     }
 
     /// 把 Claude 的最终回复压成一行通知正文。
-    static func summarize(_ message: String?) -> String? {
+    /// 默认 90 字给通知横幅；轮次记录的 `assistantSummary` 用 200 ——
+    /// 时间轴节点展开后有地方摆，是分析失败/纯问答轮的兜底展示。
+    static func summarize(_ message: String?, limit: Int = 90) -> String? {
         guard let message else { return nil }
         let cleaned = message
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return nil }
-        if cleaned.count <= 90 { return cleaned }
-        return String(cleaned.prefix(88)) + "…"
+        if cleaned.count <= limit { return cleaned }
+        return String(cleaned.prefix(limit - 2)) + "…"
     }
 }
