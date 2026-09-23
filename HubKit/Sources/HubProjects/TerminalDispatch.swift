@@ -395,11 +395,34 @@ public struct TerminalDispatch: Sendable {
             + (command.map { " \(shellQuote(loginShellCommand($0)))" } ?? "")
         let create = "tmux new-session -d -s \(shellQuote(session))\(target)"
             + " || tmux new-window -t \(shellQuote(session))\(target)"
-        return "\(create); \(attach)"
+        // extended-keys 在 attach 前打开（`;` 接：两个分支都要设）。
+        // 不开的话，attach 之后由外部客户端新建的窗口会丢 Shift+Tab 这类
+        // 修饰键序列 —— claude 的权限模式切不动，而普通打字完全正常，
+        // 看起来像 claude 坏了（issue #3）。服务器级选项，幂等。
+        let extended = "tmux " + extendedKeysArguments.joined(separator: " ")
+        return "\(create); \(extended); \(attach)"
+    }
+
+    /// `tmux set -s extended-keys on` 的参数。纯函数，测试盯着别退化 ——
+    /// `-s` 是服务器级：一次打开，之后所有窗口（包括别的项目的）都受益。
+    static let extendedKeysArguments = ["set", "-s", "extended-keys", "on"]
+
+    /// session 已存在的路径（addWindow）建窗前补一次 extended-keys。
+    ///
+    /// 老 session 可能是在这个修复之前建的，只靠 launchScript 那一次
+    /// 覆盖不到它 —— 这里再设一次，幂等，3 秒超时失败也不阻断建窗。
+    private func ensureExtendedKeys() {
+        let result = Shell.run(tmux.tmuxPath, Self.extendedKeysArguments, timeout: 3)
+        if !result.succeeded {
+            Self.trace("extended-keys 设置失败（不阻断）：\(result.diagnostic)")
+        }
     }
 
     /// session 已存在：直接加窗口，这是 client 操作，app 自己跑没问题。
     private func addWindow(name: String, path: String, command: String?) -> Bool {
+        // 老 session 可能建于 extended-keys 修复之前 —— 建窗前补一次。
+        ensureExtendedKeys()
+
         // 注意 flag 必须全部排在 shell-command 之前，否则 tmux 会把 flag
         // 当成命令的一部分。
         var args = [
@@ -441,20 +464,55 @@ public struct TerminalDispatch: Sendable {
         // 而 `Shell.run` 跑不起来时 stdout 也是空的 —— 于是探测失败会被读成
         // "没人连着"，跑去开一个新的 iTerm tab 再 attach 一次。
         let clients = Shell.run(tmux.tmuxPath, ["list-clients", "-t", sessionName], timeout: 3)
+        // 客户端状态必须落日志：历史上出现过「多次建窗后 iTerm 只剩第一个窗口、
+        // @1–@9 曾存在又消失」的现象（issue #3 的附带观察），没有这行就只能猜。
+        Self.trace("addWindow clients answered=\(clients.answered) "
+            + "list=\(clients.stdout.trimmingCharacters(in: .whitespacesAndNewlines))")
         let noClient = clients.answered
             && clients.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if noClient {
             let terminal = detectTerminal()
             ensureRunning(terminal)
+            scheduleWindowCheck(windowId: windowId, name: name)
             return runInTerminal(terminal.attachCommand, terminal: terminal)
         }
 
         // 有客户端：iTerm 不会自动前置新 tab，得主动切过去。
         if !windowId.isEmpty {
-            Shell.run(tmux.tmuxPath, ["select-window", "-t", windowId], timeout: 3)
+            let selected = Shell.run(tmux.tmuxPath, ["select-window", "-t", windowId], timeout: 3)
+            if !selected.succeeded {
+                Self.trace("select-window 失败 window=\(windowId) \(selected.diagnostic)")
+            }
         }
         Shell.osascript(#"tell application "iTerm2" to activate"#, timeout: 4)
+        scheduleWindowCheck(windowId: windowId, name: name)
         return true
+    }
+
+    /// 建窗后 2s / 30s 回查窗口还在不在、pane 死没死。
+    ///
+    /// 用来区分两种在外面看起来一模一样的故障：**claude 秒退**（pane_dead=1，
+    /// 有退出码）和**窗口被外部杀掉**（list-panes 直接报 can't find window）。
+    /// issue #3 的历史观察里 @1–@9 建过又消失，没有这份记录就无从归因。
+    private func scheduleWindowCheck(windowId: String, name: String) {
+        guard !windowId.isEmpty else { return }
+        let tmuxPath = tmux.tmuxPath
+        for delay in [2.0, 30.0] {
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) {
+                let panes = Shell.run(
+                    tmuxPath,
+                    [
+                        "list-panes", "-t", windowId, "-F",
+                        "dead=#{pane_dead} status=#{pane_dead_status} cmd=#{pane_current_command}",
+                    ],
+                    timeout: 3
+                )
+                let state = panes.succeeded
+                    ? panes.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                    : "查询失败：\(panes.diagnostic)"
+                Self.trace("窗口回查 +\(Int(delay))s name=\(name) window=\(windowId) \(state)")
+            }
+        }
     }
 
     // MARK: - 终端控制

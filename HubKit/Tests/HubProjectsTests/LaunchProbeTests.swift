@@ -97,6 +97,40 @@ final class LaunchProbeTests: XCTestCase {
         )
     }
 
+    // MARK: - extended-keys（issue #3）
+
+    /// **界面新开的窗口里 Shift+Tab 必须能用。**
+    ///
+    /// iTerm2 -CC 控制模式下，attach 之后由外部 tmux 客户端（app 自己）
+    /// 新建的窗口，Shift+Tab（`ESC [ Z` 修饰键序列）会被默认关闭的
+    /// `extended-keys` 丢掉 —— 普通打字正常，但切不了 claude 的权限模式。
+    /// 第一个窗口在 attach 前就存在，不受影响，于是表现成
+    /// 「第一个窗口正常、后面的都不行」的谜题（issue #3，实机确认
+    /// `tmux set -s extended-keys on` 后恢复且第一个窗口不回归）。
+    func testLaunchScriptTurnsOnExtendedKeys() {
+        let script = TerminalDispatch.launchScript(
+            session: "hub", name: "n", path: "/tmp", command: nil,
+            attach: "tmux -CC attach -t hub"
+        )
+        XCTAssertTrue(
+            script.contains("; tmux set -s extended-keys on;"),
+            "建 session 的命令链里必须打开 extended-keys：\(script)"
+        )
+        XCTAssertTrue(
+            script.hasSuffix("; tmux -CC attach -t hub"),
+            "extended-keys 必须排在 attach 之前，attach 仍是最后一步"
+        )
+    }
+
+    /// addWindow（session 已存在）那条路用的同一份参数。纯函数，
+    /// 测试盯着它别退化 —— `-s` 是服务器级选项，幂等、对全服务器生效。
+    func testExtendedKeysArgumentsStayServerWide() {
+        XCTAssertEqual(
+            TerminalDispatch.extendedKeysArguments,
+            ["set", "-s", "extended-keys", "on"]
+        )
+    }
+
     func testLaunchScriptQuotesPathsWithSpaces() {
         let script = TerminalDispatch.launchScript(
             session: "hub", name: "my app", path: "/tmp/a b", command: nil, attach: "x"
