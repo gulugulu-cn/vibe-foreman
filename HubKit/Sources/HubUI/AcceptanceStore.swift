@@ -94,11 +94,20 @@ public final class AcceptanceStore {
         }
 
         // 清单里没有待办就别打扰 —— 没启用这功能的项目必须完全无感。
-        guard ledger(for: projectPath).items.contains(where: \.needsAttention) else {
+        guard ledger(for: projectPath).activeItems.contains(where: \.needsAttention) else {
             return false
         }
         lastInterceptAt[sessionId] = now
         return true
+    }
+
+    /// 只卸膛，不做任何别的判断、不碰冷却时间戳。
+    ///
+    /// 给「盯梢关着」的收工用：膛必须照卸（防死循环是结构性的，不因开关而变），
+    /// 但纯观察的那些收工不许烧 `lastInterceptAt` —— 否则用户一打开盯梢，
+    /// 前 15 分钟一次都拦不了，开关看起来是坏的。
+    public func disarm(sessionId: String) {
+        armedSessions.remove(sessionId)
     }
 
     /// 只读地看一眼有没有上膛。给测试和排障用，不改状态。
@@ -209,6 +218,72 @@ public final class AcceptanceStore {
         mutate(projectPath) { $0.items.removeAll { $0.id == id } }
     }
 
+    // MARK: - 批量操作
+    //
+    // 实机一个项目 496 条、只有单条 ✓/✗/删 —— 清不动就永远不清，
+    // 清单从仪表变成垃圾场。这些入口是 UI 批量工具条的后端。
+
+    public func remove(ids: Set<String>, from projectPath: String) {
+        guard !ids.isEmpty else { return }
+        mutate(projectPath) { $0.items.removeAll { ids.contains($0.id) } }
+    }
+
+    public func removeAll(in projectPath: String) {
+        mutate(projectPath) { $0.items.removeAll() }
+    }
+
+    /// 只清活跃条目 —— 归档的已经"清"过了，不受 Lane 操作影响。
+    public func clear(lane: AcceptanceLedger.Lane, in projectPath: String) {
+        mutate(projectPath) { ledger in
+            ledger.items.removeAll { $0.archivedAt == nil && lane.contains($0.status) }
+        }
+    }
+
+    /// 按会话清：一次跑偏的会话灌进来的一批要点，一键清掉。
+    public func removeItems(sessionId: String, in projectPath: String) {
+        mutate(projectPath) { $0.items.removeAll { $0.sourceSessionId == sessionId } }
+    }
+
+    /// 归档 = 打标不删除。可恢复，去重继续对全量生效。
+    public func archive(ids: Set<String>, in projectPath: String) {
+        guard !ids.isEmpty else { return }
+        mutate(projectPath) { ledger in
+            for index in ledger.items.indices
+            where ids.contains(ledger.items[index].id) && ledger.items[index].archivedAt == nil {
+                ledger.items[index].archivedAt = Date()
+            }
+        }
+    }
+
+    public func archive(lane: AcceptanceLedger.Lane, in projectPath: String) {
+        archive(
+            ids: Set(ledger(for: projectPath).items(in: lane).map(\.id)), in: projectPath
+        )
+    }
+
+    public func unarchive(ids: Set<String>, in projectPath: String) {
+        guard !ids.isEmpty else { return }
+        mutate(projectPath) { ledger in
+            for index in ledger.items.indices where ids.contains(ledger.items[index].id) {
+                ledger.items[index].archivedAt = nil
+            }
+        }
+    }
+
+    /// 自动过期：所有项目里 N 天没动静的活跃条目归档。启动时跑一次。
+    ///
+    /// 没有这条，496 条「待验收」就是这么攒出来的 —— 条目只进不出，
+    /// 清单从仪表变成债务。归档可恢复，代价只是少看一眼。
+    public func archiveStale(olderThan days: Int = 14) {
+        let cutoff = Date().addingTimeInterval(-TimeInterval(days) * 24 * 3600)
+        for projectPath in projectPaths {
+            let stale = ledger(for: projectPath).activeItems
+                .filter { $0.updatedAt < cutoff }
+                .map(\.id)
+            archive(ids: Set(stale), in: projectPath)
+        }
+    }
+
     /// 勾/取消勾一个分项。
     ///
     /// 全部分项都勾上时**不自动把整条标成已验收** —— 分项是用户手勾的进度记录，
@@ -291,7 +366,7 @@ public final class AcceptanceStore {
     public func unfinishedAssistantTasks(sessionId: String, in projectPath: String)
         -> [AcceptanceItem]
     {
-        ledger(for: projectPath).items.filter {
+        ledger(for: projectPath).activeItems.filter {
             $0.sourceSessionId == sessionId
                 && $0.origin == .assistantTask
                 && $0.needsAttention
@@ -362,10 +437,25 @@ public final class AcceptanceStore {
     ///   不这么说的话它会拿自己的 TodoWrite 来对照，那就白做了；
     /// - 结尾要求"输出完就停下"—— 否则它会顺手去补做遗漏项，
     ///   自查回答反而收不到（这个降级可以接受，但不该是默认行为）。
+    /// 注入正文 + 这一轮点到名的条目。
+    ///
+    /// **纯读。** 「问过一次」的记账在 `markAsked` —— 由调用方在**确认真的
+    /// 拦下来**之后才记。早先计数写在这里面，「算了一次文本但最终没拦」
+    /// （stopHookActive、盯梢关着）也在虚增 askCount，
+    /// likelyMisextracted 的判据整个失真。
+    public struct InjectionPayload: Sendable {
+        public let text: String
+        public let itemIds: Set<String>
+    }
+
     public func injectionText(for projectPath: String) -> String? {
+        injectionPayload(for: projectPath)?.text
+    }
+
+    public func injectionPayload(for projectPath: String) -> InjectionPayload? {
         // 问过 3 次还是「没做」的排除掉：多半不是它偷懒，是这条拆错了。
-        // 继续问只会一轮轮浪费，还把真正该问的挤出去。
-        let pending = ledger(for: projectPath).items
+        // 继续问只会一轮轮浪费，还把真正该问的挤出去。归档的同样不进。
+        let pending = ledger(for: projectPath).activeItems
             .filter { $0.needsAttention && !$0.likelyMisextracted }
         guard !pending.isEmpty else { return nil }
 
@@ -389,15 +479,6 @@ public final class AcceptanceStore {
         }
         let shown = Array(ordered.prefix(cap))
 
-        // 记下这一轮问了谁。没有这一步，上面的轮换排序就没有依据。
-        let asked = Set(shown.map(\.id))
-        mutate(projectPath) { ledger in
-            for index in ledger.items.indices where asked.contains(ledger.items[index].id) {
-                ledger.items[index].lastAskedAt = Date()
-                ledger.items[index].askCount += 1
-            }
-        }
-
         var lines = shown.map { item -> String in
             let condition = item.acceptance.map { "（验收条件：\($0)）" } ?? ""
             return "- [\(item.id)] \(item.text)\(condition)"
@@ -407,7 +488,7 @@ public final class AcceptanceStore {
             lines.append("（另有 \(ordered.count - cap) 条未列出，这轮先核对上面这些）")
         }
 
-        return """
+        let text = """
         【Vibe Foreman 验收守望】以下要点来自**用户的原始需求和已批准的计划**，\
         不是你自己列的 todo。逐条核对，给结论和证据。
 
@@ -420,6 +501,19 @@ public final class AcceptanceStore {
         done 只在**代码里真有对应改动**时才填 true。没做就填 false 并说明原因，\
         不要编造证据 —— 这份回答会拿真实的 git diff 复核。
         """
+        return InjectionPayload(text: text, itemIds: Set(shown.map(\.id)))
+    }
+
+    /// 记下「这一轮真的问了谁」。轮换排序和 likelyMisextracted 都以它为依据，
+    /// 所以只能由调用方在**确认拦下来之后**调，别在算文本时顺手记。
+    public func markAsked(ids: Set<String>, in projectPath: String) {
+        guard !ids.isEmpty else { return }
+        mutate(projectPath) { ledger in
+            for index in ledger.items.indices where ids.contains(ledger.items[index].id) {
+                ledger.items[index].lastAskedAt = Date()
+                ledger.items[index].askCount += 1
+            }
+        }
     }
 
     // MARK: - 导出归档
@@ -475,12 +569,19 @@ public final class AcceptanceStore {
             }
         }
 
-        section("存疑（自报做完但代码里找不到）", ledger.items.filter { $0.status == .disputed })
-        section("未验收", ledger.items.filter { $0.status == .open })
-        section("待复核", ledger.items.filter { $0.status == .claimed })
-        section("已确认", ledger.items.filter { $0.status == .confirmed })
-        section("已接受", ledger.items.filter { $0.status == .accepted })
-        section("已划掉", ledger.items.filter { $0.status == .dropped })
+        let active = ledger.activeItems
+        section("存疑（自报做完但代码里找不到）", active.filter { $0.status == .disputed })
+        section("未验收", active.filter { $0.status == .open })
+        section("待复核", active.filter { $0.status == .claimed })
+        section("已确认", active.filter { $0.status == .confirmed })
+        section("已接受", active.filter { $0.status == .accepted })
+        section("已划掉", active.filter { $0.status == .dropped })
+
+        // 归档的不逐条摊开（几百条会把报告淹掉），但数量要如实说。
+        if !ledger.archivedItems.isEmpty {
+            out += "\n## 已归档（\(ledger.archivedItems.count)）\n\n"
+            out += "归档条目不计入上方统计，可在 app 的归档视图中查看或恢复。\n"
+        }
 
         return out
     }
@@ -554,7 +655,7 @@ public final class AcceptanceStore {
         )) ?? []
         for file in files where file.pathExtension == "json" {
             guard let data = try? Data(contentsOf: file) else { continue }
-            guard let ledger = try? JSONDecoder().decode(AcceptanceLedger.self, from: data) else {
+            guard var ledger = try? JSONDecoder().decode(AcceptanceLedger.self, from: data) else {
                 // 同 reload：解不出来的先保住，别等下一次写入把它盖掉。
                 let rescued = file.deletingPathExtension()
                     .appendingPathExtension("broken-\(Int(Date().timeIntervalSince1970))")
@@ -564,8 +665,31 @@ public final class AcceptanceStore {
                 """)
                 continue
             }
+            migrateLegacyIfNeeded(&ledger)
             ledgers[ledger.projectPath] = ledger
         }
+    }
+
+    /// 存量归档：老版本文件（缺 `migratedAt`）第一次加载时整体归档。
+    ///
+    /// 实机背景：一个项目 496 条「待验收」，绝大多数永远不会有人去验 ——
+    /// 升级后清单立即清爽，数据在归档视图里可查可恢复，时间轴从零开始。
+    /// `migratedAt` 落盘后幂等，不会重复迁移；新建的清单 born migrated。
+    private func migrateLegacyIfNeeded(_ ledger: inout AcceptanceLedger) {
+        guard ledger.migratedAt == nil else { return }
+        let now = Date()
+        for index in ledger.items.indices where ledger.items[index].archivedAt == nil {
+            ledger.items[index].archivedAt = now
+        }
+        // 老缓冲不再喂新提取 —— 那正是清单爆炸的燃料。
+        ledger.rawPrompts = []
+        ledger.migratedAt = now
+        persist(ledger)
+        let path = ledger.projectPath
+        let count = ledger.items.count
+        HubLog.app.notice("""
+        验收清单存量迁移：\(path, privacy: .public) 归档 \(count, privacy: .public) 条
+        """)
     }
 }
 

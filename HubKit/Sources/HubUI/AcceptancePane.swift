@@ -25,9 +25,27 @@ struct AcceptancePane: View {
     let settings: VerifierSettings
     let verifier: AcceptanceVerifier
     @Bindable var watchdog: SessionWatchdog
+    @Bindable var rounds: RoundStore
     @Binding var selection: String?
 
     @State private var showProbes = false
+    /// 参考清单折叠区。**默认收起** —— 这一页的主体是轮次时间轴，
+    /// 清单是给开发者看「本流程该包含哪些」的参考，不再是页面的中心。
+    @State private var showReference = false
+    /// 参考清单的编辑（多选）模式。
+    @State private var editing = false
+    @State private var selected: Set<String> = []
+    /// 归档视图。
+    @State private var showArchive = false
+    /// 待确认的破坏性批量操作。
+    @State private var pendingBatch: BatchAction?
+
+    enum BatchAction: String, Identifiable {
+        case removeSelected
+        case clearLane
+        case removeAll
+        var id: String { rawValue }
+    }
 
     /// 正在跑验证的那一条。同时只允许跑一条 —— 并发跑 `swift build`
     /// 会互相抢构建目录锁，结果全是假失败。
@@ -103,23 +121,34 @@ struct AcceptancePane: View {
             if !pickerPaths.isEmpty { controls }
             watchdogBar
             sessionPromises
+            referenceSection
 
-            if ledger?.items.isEmpty ?? true {
-                ContentUnavailableView(
-                    currentPath.map { "\(label(for: $0)) 还没有清单" } ?? "还没有项目",
-                    systemImage: "checklist",
-                    description: Text("在下面手动加一条，或等 Vibe Foreman 从你的需求里自动拆出来")
-                )
-                .frame(maxHeight: .infinity)
-            } else {
-                lanes
-                list
-            }
+            Divider()
 
-            composer
+            // 主体：轮次时间轴。hub 作为观察者，每轮记「说了什么 vs 实际改了什么」。
+            RoundTimeline(
+                rounds: currentPath.map { rounds.rounds(for: $0) } ?? [],
+                onOpenDiff: { path, round in
+                    openDiff(path: path, since: round.baselineCommit, title: round.promptSummary)
+                }
+            )
         }
         .sheet(item: $diff) { request in
             diffSheet(request)
+        }
+        .sheet(isPresented: $showArchive) {
+            archiveSheet
+        }
+        .confirmationDialog(
+            batchTitle, isPresented: .init(
+                get: { pendingBatch != nil },
+                set: { if !$0 { pendingBatch = nil } }
+            ), titleVisibility: .visible
+        ) {
+            Button("确认", role: .destructive) { performPendingBatch() }
+            Button("取消", role: .cancel) { pendingBatch = nil }
+        } message: {
+            Text("删除不可恢复。想留底的话用「归档」。")
         }
     }
 
@@ -168,9 +197,13 @@ struct AcceptancePane: View {
     /// 在后台读：`git diff` 要 fork 一个进程，大仓库上能到几百毫秒，
     /// 放在主线程会让整个窗口卡一下。
     private func openDiff(path: String, item: AcceptanceItem) {
+        openDiff(path: path, since: item.baselineCommit, title: item.text)
+    }
+
+    /// 时间轴节点和清单条目共用同一张 diff sheet。
+    private func openDiff(path: String, since: String?, title: String) {
         guard let cwd = currentPath else { return }
-        diff = DiffRequest(path: path, itemText: item.text, patch: nil)
-        let since = item.baselineCommit
+        diff = DiffRequest(path: path, itemText: title, patch: nil)
         Task.detached(priority: .userInitiated) {
             let patch = GitDiff.patch(cwd, since: since, paths: [path], limit: 200_000)
             await MainActor.run {
@@ -215,6 +248,13 @@ struct AcceptancePane: View {
 
             Spacer()
 
+            if let ledger, !ledger.archivedItems.isEmpty {
+                Button("归档 \(ledger.archivedItems.count)") { showArchive = true }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
             Button("导出报告") { export() }
                 .buttonStyle(.borderless)
                 .font(.system(size: 12, weight: .medium))
@@ -222,6 +262,194 @@ struct AcceptancePane: View {
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 10)
+    }
+
+    // MARK: - 参考清单（折叠区）
+
+    /// 提取出来的要点降级为「参考」：给开发者看本流程该包含哪些，
+    /// 不再是页面中心，更不再是逼 AI 核对的债务。默认收起。
+    @ViewBuilder
+    private var referenceSection: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { showReference.toggle() }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: showReference ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text("参考清单")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("\(ledger?.activeItems.count ?? 0)")
+                            .font(.system(size: 11)).monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                if showReference {
+                    if editing {
+                        Button("归档所选") { archiveSelected() }
+                            .disabled(selected.isEmpty)
+                        Button("删除所选") { pendingBatch = .removeSelected }
+                            .foregroundStyle(selected.isEmpty ? .secondary : IslandTheme.danger)
+                            .disabled(selected.isEmpty)
+                        Button("完成") { editing = false; selected = [] }
+                    } else {
+                        Button("编辑") { editing = true }
+                        batchMenu
+                    }
+                }
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 11, weight: .medium))
+            .padding(.horizontal, 20)
+            .padding(.bottom, showReference ? 8 : 10)
+
+            if showReference {
+                lanes
+                list
+                    // 参考清单展开时也不许把时间轴挤没 —— 它只是参考。
+                    .frame(maxHeight: 300)
+                composer
+            }
+        }
+    }
+
+    /// 批量操作菜单。破坏性动作（删除类）全部过 confirmationDialog。
+    @ViewBuilder
+    private var batchMenu: some View {
+        Menu {
+            Button("归档「\(lane.rawValue)」整段") { archiveLane() }
+            Button("清空「\(lane.rawValue)」", role: .destructive) { pendingBatch = .clearLane }
+            Divider()
+            Button("全部归档") { archiveAll() }
+            Button("全部删除", role: .destructive) { pendingBatch = .removeAll }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 12))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    private var batchTitle: String {
+        switch pendingBatch {
+        case .removeSelected: return "删除所选的 \(selected.count) 条？"
+        case .clearLane: return "清空「\(lane.rawValue)」的全部条目？"
+        case .removeAll: return "删除这个项目的全部条目？"
+        case nil: return ""
+        }
+    }
+
+    private func performPendingBatch() {
+        guard let path = currentPath else { return }
+        switch pendingBatch {
+        case .removeSelected:
+            acceptance.remove(ids: selected, from: path)
+            selected = []
+        case .clearLane:
+            acceptance.clear(lane: lane, in: path)
+        case .removeAll:
+            acceptance.removeAll(in: path)
+        case nil:
+            break
+        }
+        pendingBatch = nil
+    }
+
+    private func archiveSelected() {
+        guard let path = currentPath else { return }
+        acceptance.archive(ids: selected, in: path)
+        selected = []
+    }
+
+    private func archiveLane() {
+        guard let path = currentPath else { return }
+        acceptance.archive(lane: lane, in: path)
+    }
+
+    private func archiveAll() {
+        guard let path = currentPath else { return }
+        acceptance.archive(
+            ids: Set(acceptance.ledger(for: path).activeItems.map(\.id)), in: path
+        )
+    }
+
+    // MARK: - 归档视图
+
+    /// 归档不是删除 —— 这里能看、能恢复、能永久删。存量迁移进来的
+    /// 几百条老数据也躺在这儿。
+    @ViewBuilder
+    private var archiveSheet: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("归档 · \(currentPath.map { label(for: $0) } ?? "")")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Text("\(ledger?.archivedItems.count ?? 0) 条")
+                    .font(.system(size: 12)).monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            .padding(14)
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(spacing: 4) {
+                    ForEach(ledger?.archivedItems ?? []) { item in
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(Self.color(for: item.status))
+                                .frame(width: 6, height: 6)
+                            Text(item.text)
+                                .font(.system(size: 12))
+                                .lineLimit(1)
+                            Spacer(minLength: 6)
+                            Button("恢复") { unarchive(item) }
+                            Button("删除") { removeArchived(item) }
+                                .foregroundStyle(IslandTheme.danger)
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 11, weight: .medium))
+                        .padding(.horizontal, 12).padding(.vertical, 5)
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+
+            Divider()
+            HStack {
+                Button("清空归档") { removeAllArchived() }
+                    .foregroundStyle(IslandTheme.danger)
+                Spacer()
+                Button("关闭") { showArchive = false }.keyboardShortcut(.defaultAction)
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 12, weight: .medium))
+            .padding(12)
+        }
+        .frame(width: 560, height: 440)
+    }
+
+    private func unarchive(_ item: AcceptanceItem) {
+        guard let path = currentPath else { return }
+        acceptance.unarchive(ids: [item.id], in: path)
+    }
+
+    private func removeArchived(_ item: AcceptanceItem) {
+        guard let path = currentPath else { return }
+        acceptance.remove(ids: [item.id], from: path)
+    }
+
+    private func removeAllArchived() {
+        guard let path = currentPath else { return }
+        acceptance.remove(
+            ids: Set(acceptance.ledger(for: path).archivedItems.map(\.id)), from: path
+        )
     }
 
     // MARK: - 盯梢
@@ -241,7 +469,9 @@ struct AcceptancePane: View {
             let recent = watchdog.lastNudge(for: path)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
-                    Toggle("盯梢：停了就追问", isOn: Binding(
+                    // 一个开关管住**所有**对会话的干预：Stop 时的收工核对注入
+                    // + 停了之后的 tmux 追问。关着 = hub 纯观察，绝不打扰会话。
+                    Toggle("盯梢：干预会话（收工核对 + 停了追问）", isOn: Binding(
                         get: { on },
                         set: { watchdog.setWatching($0, path) }
                     ))
@@ -523,6 +753,25 @@ struct AcceptancePane: View {
         Card {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
+                    // 编辑模式：行首多选框。批量归档/删除靠它。
+                    if editing {
+                        Button {
+                            if selected.contains(item.id) {
+                                selected.remove(item.id)
+                            } else {
+                                selected.insert(item.id)
+                            }
+                        } label: {
+                            Image(systemName: selected.contains(item.id)
+                                ? "checkmark.square.fill" : "square")
+                                .font(.system(size: 13))
+                                .foregroundStyle(
+                                    selected.contains(item.id) ? IslandTheme.shell : .secondary
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+
                     // 可点开的那一段。操作按钮放在它外面 —— 套在同一个
                     // onTapGesture 里的话，点「确认」会顺手把行也展开。
                     HStack(spacing: 8) {

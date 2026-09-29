@@ -157,6 +157,11 @@ public struct AcceptanceItem: Codable, Sendable, Identifiable, Equatable {
     public var askCount: Int
     /// 入库时的 HEAD。diff 回溯的起点 —— 没有它就没法回答"这条要点之后代码变了什么"。
     public var baselineCommit: String?
+    /// nil = 活跃。归档是打标不是删除：可恢复，且去重继续对全量生效
+    /// （用户划掉过的条目不会因归档而复活）。
+    public var archivedAt: Date?
+    /// 产生这条要点的那一轮（时间轴节点）。老数据没有，nil 正常。
+    public var roundId: String?
 
     public init(
         id: String = UUID().uuidString,
@@ -172,10 +177,14 @@ public struct AcceptanceItem: Codable, Sendable, Identifiable, Equatable {
         sourceSessionId: String? = nil,
         baselineCommit: String? = nil,
         lastAskedAt: Date? = nil,
-        askCount: Int = 0
+        askCount: Int = 0,
+        archivedAt: Date? = nil,
+        roundId: String? = nil
     ) {
         self.lastAskedAt = lastAskedAt
         self.askCount = askCount
+        self.archivedAt = archivedAt
+        self.roundId = roundId
         self.id = id
         self.text = text
         self.acceptance = acceptance
@@ -210,12 +219,20 @@ public struct AcceptanceItem: Codable, Sendable, Identifiable, Equatable {
         baselineCommit = try container.decodeIfPresent(String.self, forKey: .baselineCommit)
         lastAskedAt = try container.decodeIfPresent(Date.self, forKey: .lastAskedAt)
         askCount = try container.decodeIfPresent(Int.self, forKey: .askCount) ?? 0
+        archivedAt = try container.decodeIfPresent(Date.self, forKey: .archivedAt)
+        roundId = try container.decodeIfPresent(String.self, forKey: .roundId)
     }
 
     /// 问过好几次它都说没做 —— 多半不是它偷懒，是这条要点本身拆错了。
     ///
     /// 继续问下去只会一轮轮浪费，还把真正该问的挤出去。标出来让用户去处理。
-    public var likelyMisextracted: Bool { askCount >= 3 && status == .open }
+    ///
+    /// **disputed 必须包含在内。** 早先只认 `.open`，而 disputed 在注入排序里
+    /// 永远最优先 —— 一条误拆的 disputed 条目会每轮霸占槽位、askCount 无上限
+    /// 地涨、永远退不出去（实机被问到第 5 次，Claude 在证据里直接抱怨）。
+    public var likelyMisextracted: Bool {
+        askCount >= 3 && (status == .open || status == .disputed)
+    }
 
     /// 把一条塞了好几件事的要点拆开。
     ///
@@ -351,19 +368,27 @@ public struct AcceptanceLedger: Codable, Sendable, Equatable {
     /// 塞一条危险命令绕不过前两道 —— 有测试守这一点。
     public var authorizedCommands: [String]
     public var updatedAt: Date
+    /// 存量归档迁移的时间戳。
+    ///
+    /// **新建的清单默认就是"已迁移"**（born migrated）—— 只有从老版本文件
+    /// 解码出来、缺这个字段的清单才需要迁移。没有这个默认值的话，
+    /// 内存里新建的清单下次启动会被误当成存量整体归档。
+    public var migratedAt: Date?
 
     public init(
         projectPath: String,
         items: [AcceptanceItem] = [],
         rawPrompts: [RawPrompt] = [],
         authorizedCommands: [String] = [],
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        migratedAt: Date? = Date()
     ) {
         self.projectPath = projectPath
         self.items = items
         self.rawPrompts = rawPrompts
         self.authorizedCommands = authorizedCommands
         self.updatedAt = updatedAt
+        self.migratedAt = migratedAt
     }
 
     /// **手写解码，每个字段都 decodeIfPresent。**
@@ -391,25 +416,35 @@ public struct AcceptanceLedger: Codable, Sendable, Equatable {
             [String].self, forKey: .authorizedCommands
         ) ?? []
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        // 老文件缺这个键 → nil → 等待 AcceptanceStore 的一次性存量归档。
+        migratedAt = try container.decodeIfPresent(Date.self, forKey: .migratedAt)
     }
 
-    public var isEmpty: Bool { items.isEmpty && rawPrompts.isEmpty }
+    public var isEmpty: Bool { activeItems.isEmpty && rawPrompts.isEmpty }
+
+    // MARK: - 活跃 / 归档
+    //
+    // 统计、Lane、注入、追问全部只看活跃条目；`items` 是全量存储，
+    // 按 id 的写操作和去重仍走全量 —— 归档条目再被拆出来一次不该复活。
+
+    public var activeItems: [AcceptanceItem] { items.filter { $0.archivedAt == nil } }
+    public var archivedItems: [AcceptanceItem] { items.filter { $0.archivedAt != nil } }
 
     // MARK: - 汇报级统计
     //
     // app 窗口窄，塞不下逐条证据，所以列表上方那一行汇报条是主要的信息载体。
-    // 这几个计数就是那一行。
+    // 这几个计数就是那一行。**只数活跃条目** —— 归档的不该再吓人。
 
-    public var disputedCount: Int { items.filter { $0.status == .disputed }.count }
-    public var openCount: Int { items.filter { $0.status == .open }.count }
-    public var claimedCount: Int { items.filter { $0.status == .claimed }.count }
+    public var disputedCount: Int { activeItems.filter { $0.status == .disputed }.count }
+    public var openCount: Int { activeItems.filter { $0.status == .open }.count }
+    public var claimedCount: Int { activeItems.filter { $0.status == .claimed }.count }
 
     /// 有实测证明的条数。
     ///
     /// **只数 `hasProof`，不数 `.confirmed`。** 一条要点可以因为 diff 里有痕迹而
     /// 被判 confirmed，但那仍然只是"代码动过"，不是"功能能用"。这个数字要能
     /// 回答的是后者。
-    public var provenCount: Int { items.filter(\.hasProof).count }
+    public var provenCount: Int { activeItems.filter(\.hasProof).count }
 
     /// 列表上方的分段切换。
     ///
@@ -435,11 +470,11 @@ public struct AcceptanceLedger: Codable, Sendable, Equatable {
     }
 
     public func items(in lane: Lane) -> [AcceptanceItem] {
-        items.filter { lane.contains($0.status) }
+        activeItems.filter { lane.contains($0.status) }
     }
 
     public func count(in lane: Lane) -> Int {
-        items.reduce(0) { lane.contains($1.status) ? $0 + 1 : $0 }
+        activeItems.reduce(0) { lane.contains($1.status) ? $0 + 1 : $0 }
     }
 
     /// 一句话汇报。UI 和导出报告共用，避免两处各写一份然后漂移。
@@ -448,7 +483,7 @@ public struct AcceptanceLedger: Codable, Sendable, Equatable {
         if disputedCount > 0 { parts.append("存疑 \(disputedCount)") }
         if openCount > 0 { parts.append("未验收 \(openCount)") }
         if claimedCount > 0 { parts.append("待复核 \(claimedCount)") }
-        parts.append("已证 \(provenCount)/\(items.count)")
+        parts.append("已证 \(provenCount)/\(activeItems.count)")
         return parts.joined(separator: " · ")
     }
 }

@@ -178,4 +178,31 @@ final class AcceptanceExtractorTests: XCTestCase {
         XCTAssertFalse(prompt.contains("<已批准的计划>"))
         XCTAssertFalse(prompt.contains("<清单里已有的要点>"))
     }
+
+    /// **流程噪音必须被明确排除。**
+    ///
+    /// 实机截图：「最终审计通过前不做正式发布」「六类修改保持独立提交、
+    /// 不 squash」「PR #88 保持 Draft」全躺在「待验收」里 —— 发布备忘、
+    /// 编码约定、一次性操作都不是可验收的功能点，提取进来只会淹掉真正
+    /// 该验的，且永远不会有人去验。
+    func testPromptForbidsProcessNoise() {
+        let prompt = AcceptanceExtractor.prompt(prompts: "随便", plan: nil, existing: [])
+
+        XCTAssertTrue(prompt.contains("发布"), "要排除发布/部署备忘")
+        XCTAssertTrue(prompt.contains("约定"), "要排除编码/流程约定")
+        XCTAssertTrue(prompt.contains("一次性操作"), "要排除一次性操作指令")
+        XCTAssertTrue(prompt.contains("隐含项最多 1 条"), "隐含项从 2 收紧到 1")
+    }
+
+    /// 单次最多入库 5 条 —— 模型不守约时解析端兜底截断。
+    /// 一次对话灌几十条正是清单爆炸（496 条）的形状。
+    func testParseCapsAtFivePoints() {
+        let rows = (0..<8)
+            .map { #"{"text":"要点 \#($0)","acceptance":"","inferred":false}"# }
+            .joined(separator: ",")
+
+        let points = AcceptanceExtractor.parse(#"{"points":[\#(rows)]}"#)
+
+        XCTAssertEqual(points?.count, 5)
+    }
 }

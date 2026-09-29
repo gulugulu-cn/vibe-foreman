@@ -251,6 +251,10 @@ final class AcceptanceStoreTests: XCTestCase {
         }
 
         let first = store.injectionText(for: project) ?? ""
+        // 「问过」由调用方在真拦下之后记账（markAsked）—— 这里模拟第一轮真的拦了。
+        store.markAsked(
+            ids: store.injectionPayload(for: project)?.itemIds ?? [], in: project
+        )
         let second = store.injectionText(for: project) ?? ""
 
         let firstIDs = store.ledger(for: project).items
@@ -272,7 +276,11 @@ final class AcceptanceStoreTests: XCTestCase {
         let item = pendingItem("这条大概率拆错了")
         store.add(item, to: project)
 
-        for _ in 0..<3 { _ = store.injectionText(for: project) }
+        for _ in 0..<3 {
+            store.markAsked(
+                ids: store.injectionPayload(for: project)?.itemIds ?? [], in: project
+            )
+        }
 
         XCTAssertTrue(store.ledger(for: project).items.first?.likelyMisextracted ?? false)
         XCTAssertNil(store.injectionText(for: project), "问过 3 次就别再问了")
@@ -312,6 +320,55 @@ final class AcceptanceStoreTests: XCTestCase {
 
         XCTAssertEqual(text?.contains("这条还没做"), true)
         XCTAssertEqual(text?.contains("这条早就做完了"), false)
+    }
+
+    // MARK: - 注入是纯读，「问过」由 markAsked 记账
+
+    /// **`injectionText` 是查询，不许有副作用。**
+    ///
+    /// 旧实现在这里顺手 askCount += 1 并落盘 —— 于是「算了一次注入文本但
+    /// 最终没拦」（stopHookActive、盯梢关着）也在虚增计数，
+    /// likelyMisextracted 的判据整个失真。
+    func testInjectionTextIsAPureRead() {
+        let store = AcceptanceStore(directory: nil)
+        store.add(pendingItem(), to: project)
+
+        _ = store.injectionText(for: project)
+        _ = store.injectionText(for: project)
+
+        XCTAssertEqual(store.ledger(for: project).items.first?.askCount, 0, "只读不该记「问过」")
+    }
+
+    /// 真拦下来了才记一笔 —— markAsked 是唯一的计数入口。
+    func testMarkAskedThreeTimesRetiresTheItem() {
+        let store = AcceptanceStore(directory: nil)
+        store.add(pendingItem("这条大概率拆错了"), to: project)
+
+        for _ in 0..<3 {
+            guard let payload = store.injectionPayload(for: project) else {
+                return XCTFail("前三次都应该还问")
+            }
+            store.markAsked(ids: payload.itemIds, in: project)
+        }
+
+        XCTAssertTrue(store.ledger(for: project).items.first?.likelyMisextracted ?? false)
+        XCTAssertNil(store.injectionText(for: project), "问满 3 次就别再问了")
+    }
+
+    /// **disputed 条目问满 3 次同样要退出注入池。**
+    ///
+    /// 实机事故：likelyMisextracted 只认 `.open`，而 disputed 在注入排序里
+    /// 永远最优先 —— 一条误拆的 disputed 会每轮霸占槽位、askCount 无上限地涨、
+    /// 被问了 5 次还在问（Claude 自己在证据里抱怨"这已经是第 5 次被问到了"）。
+    func testLikelyMisextractedCoversDisputedItems() {
+        let store = AcceptanceStore(directory: nil)
+        var item = pendingItem("拆错的存疑条")
+        item.status = .disputed
+        item.askCount = 3
+        store.add(item, to: project)
+
+        XCTAssertTrue(store.ledger(for: project).items.first?.likelyMisextracted ?? false)
+        XCTAssertNil(store.injectionText(for: project), "存疑条问满 3 次也不许再霸占槽位")
     }
 
     // MARK: - 去重

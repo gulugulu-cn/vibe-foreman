@@ -16,6 +16,8 @@ public final class HookCoordinator {
     private let notifications: HubNotificationCenter
     private let projects: ProjectStore
     private let acceptance: AcceptanceStore
+    /// 轮次时间轴：一轮 = UserPromptSubmit → Stop。观察者视角，只记录不打扰。
+    private let rounds: RoundStore
     private var server: HubSocketServer?
 
     /// 每类 hook 最后一次收到事件的时间。设置页用它显示通道健康度 ——
@@ -25,6 +27,10 @@ public final class HookCoordinator {
     private let dedup = HookDedup()
     private let extractor = AcceptanceExtractor()
     private let auditor = AcceptanceAuditor()
+    /// 观察者分析：Stop 后在后台对照「说了什么 vs 实际改了什么」，落进时间轴。
+    private let analyzer = RoundAnalyzer()
+    /// 正在分析中的项目。同一个项目不并发跑，纪律同 `auditing`。
+    private var analyzing: Set<String> = []
     /// 读 Claude 自己的 todo（`~/.claude/tasks/`）。零成本，不调模型。
     private let tasks = TaskStateReader()
     /// 正在复核中的项目。同一个项目不并发跑，理由同 `extracting`。
@@ -43,6 +49,19 @@ public final class HookCoordinator {
     /// 轮询要 90 秒才确认，而 Hook 在收工那一刻就知道。
     public var onSessionStopped: ((String, String, String?) -> Void)?
 
+    /// 这个项目允不允许**干预会话**（Stop 时把验收清单注入回去逼它核对）。
+    ///
+    /// nil 或返回 false = 纯观察。main.swift 把它接到盯梢开关
+    /// （`watchdog.isWatching`）—— 一个开关管住所有对会话的干预。
+    ///
+    /// 用闭包注入而不是直接引用 SessionWatchdog：两个模块保持解耦
+    /// （接线模式同 `onSessionStopped`），测试也不用起一个 watchdog。
+    ///
+    /// 这个口子的来历是一次实机事故：注入链路上没有任何开关，盯梢关着
+    /// 也照样把 3 条清单 + 「另有 114 条未列出」塞进一个 50 分钟的会话，
+    /// Claude 被无关任务的核对要求带偏主线。
+    public var isInterventionEnabled: ((_ projectPath: String) -> Bool)?
+
     /// 闯入防轰炸：记录每个会话上次闯入的时间。
     ///
     /// 9 个会话同时收工的时候这条至关重要 —— 不限流的话岛会连续膨胀九次，
@@ -58,7 +77,8 @@ public final class HookCoordinator {
         prompts: AgentPromptCoordinator,
         notifications: HubNotificationCenter,
         projects: ProjectStore,
-        acceptance: AcceptanceStore
+        acceptance: AcceptanceStore,
+        rounds: RoundStore
     ) {
         self.store = store
         self.approvals = approvals
@@ -66,6 +86,7 @@ public final class HookCoordinator {
         self.notifications = notifications
         self.projects = projects
         self.acceptance = acceptance
+        self.rounds = rounds
     }
 
     public func start() {
@@ -177,7 +198,8 @@ public final class HookCoordinator {
     }
 
     @MainActor
-    private func handleStop(_ event: HookEvent) -> HookDecision {
+    /// internal 供测试直接驱动（同 `interceptDecision`）。
+    func handleStop(_ event: HookEvent) -> HookDecision {
         store.refresh()
 
         let path = AcceptanceStore.projectPath(forCWD: event.cwd, projects: projects)
@@ -208,6 +230,21 @@ public final class HookCoordinator {
             return decision
         }
 
+        // 收口本轮（观察者记录，只做内存/JSON 操作，不 fork git）。
+        // deny 分支不走到这里 —— 被拦下的那一轮 Claude 马上还要续跑，没结束。
+        let touched = acceptance.touchedFiles(sessionId: event.sessionId)
+        if let round = rounds.closeRound(
+            sessionId: event.sessionId, projectPath: path,
+            touchedFileCount: touched.count,
+            hadRealChanges: !touched.isEmpty,
+            assistantSummary: Self.summarize(event.lastAssistantMessage, limit: 200)
+        ) {
+            scheduleRoundAnalysis(round, touchedFiles: touched)
+        }
+        // 下一轮的 touched 从零开始 —— 不清的话每一轮都带着整个会话的累积，
+        // 「本轮改了几个文件」这个数字就没有意义了。
+        acceptance.clearTouchedFiles(sessionId: event.sessionId)
+
         // 收工事件立刻告诉盯梢。**这是「反应力」的关键**：
         // 轮询那条路要 45 秒一轮 × 连续两次确认 = 最少 90 秒才会追问，
         // 而 Hub 在这一刻就已经知道它停了。
@@ -227,22 +264,33 @@ public final class HookCoordinator {
         return decision
     }
 
-    /// 该不该拦这一次收工。
+    /// 该不该拦这一次收工。internal 供测试直接驱动（构造真事件太重）。
     @MainActor
-    private func interceptDecision(for event: HookEvent, projectPath: String) -> HookDecision {
+    func interceptDecision(for event: HookEvent, projectPath: String) -> HookDecision {
         // Claude 已经因为 Stop hook 在续跑了 —— 绝不能再拦。
         //
         // 这是**第二道**。真正的保证是下面 disarmAndShouldIntercept 里的上膛机制，
         // 因为这个字段在本机没验证过，不同 CLI 版本给不给都不确定。
         guard event.stopHookActive != true else { return .allow }
 
+        // 盯梢关着 = 纯观察，绝不注入。膛照卸（防死循环是结构性的），
+        // 但不走 disarmAndShouldIntercept —— 那条路会烧冷却时间戳，
+        // 用户一打开盯梢反而 15 分钟拦不了。
+        guard isInterventionEnabled?(projectPath) == true else {
+            acceptance.disarm(sessionId: event.sessionId)
+            return .allow
+        }
+
         guard acceptance.disarmAndShouldIntercept(
             sessionId: event.sessionId, projectPath: projectPath
         ) else { return .allow }
 
-        guard let text = acceptance.injectionText(for: projectPath) else { return .allow }
+        guard let payload = acceptance.injectionPayload(for: projectPath) else { return .allow }
 
-        return HookDecision(verdict: .deny, reason: text)
+        // 真拦下来了才记「问过一次」—— askCount 是轮换和 likelyMisextracted
+        // 的依据，虚增会让误拆判据失真。
+        acceptance.markAsked(ids: payload.itemIds, in: projectPath)
+        return HookDecision(verdict: .deny, reason: payload.text)
     }
 
     /// 把 Claude 自己列的 todo 并进清单。
@@ -318,7 +366,7 @@ public final class HookCoordinator {
     private func scheduleAudit(projectPath: String, sessionId: String) {
         guard !auditing.contains(projectPath) else { return }
 
-        let items = acceptance.ledger(for: projectPath).items
+        let items = acceptance.ledger(for: projectPath).activeItems
             .filter { $0.status == .claimed && !$0.isSettledByUser }
         guard !items.isEmpty else { return }
 
@@ -366,6 +414,93 @@ public final class HookCoordinator {
                 """)
             }
         }
+    }
+
+    /// Stop 后的观察者分析。**纯旁路**：detached 后台跑，绝不进 Stop 的同步桥。
+    ///
+    /// 门槛：有实改才调模型。touchedFiles 非空是第一判据（免 fork）；
+    /// 为空时后台再查一次真实 git diff 兜底 —— Claude 可能用 Bash 改文件，
+    /// PostToolUse 抓不到。纯问答轮只留收口时的轻量记录，不烧模型。
+    @MainActor
+    private func scheduleRoundAnalysis(_ round: RoundRecord, touchedFiles: [String]) {
+        let projectPath = round.projectPath
+        guard !analyzing.contains(projectPath) else { return }
+
+        // 本轮相关的参考条目：这个会话动过、还没定论的。可空 —— 没条目时
+        // 分析只产 recap，时间轴节点照样有内容。
+        let subjects = acceptance.ledger(for: projectPath).activeItems
+            .filter { $0.needsAttention && $0.sourceSessionId == round.sessionId }
+            .map {
+                AuditSubject(
+                    id: $0.id, text: $0.text, acceptance: $0.acceptance,
+                    claimed: round.assistantSummary ?? "（没说）"
+                )
+            }
+
+        analyzing.insert(projectPath)
+        let analyzer = self.analyzer
+
+        Task.detached(priority: .utility) {
+            let since = round.baselineCommit
+            // 门槛兜底：Hub 没看到被改文件时查一次真实 diff 再决定 ——
+            // 真没改动就是纯问答轮，收口时的轻量记录已经够了。
+            if touchedFiles.isEmpty, GitDiff.summary(projectPath, since: since).isEmpty {
+                await MainActor.run { _ = self.analyzing.remove(projectPath) }
+                return
+            }
+
+            let analysis = await analyzer.analyze(RoundAnalysisInput(
+                promptSummary: round.promptSummary,
+                assistantMessage: round.assistantSummary,
+                subjects: subjects,
+                cwd: projectPath,
+                since: since,
+                touchedFiles: touchedFiles
+            ))
+            let diffStat = Self.diffStatLine(cwd: projectPath, since: since)
+
+            await MainActor.run {
+                self.analyzing.remove(projectPath)
+                // nil = 这次没跑成。什么都别改（纪律同 scheduleAudit）。
+                guard let analysis else { return }
+
+                self.rounds.applyAnalysis(
+                    roundId: round.id, in: projectPath,
+                    recap: analysis.recap,
+                    verdicts: analysis.results.map { result in
+                        RoundVerdict(
+                            itemId: result.id, confirmed: result.confirmed, note: result.note,
+                            evidence: Self.evidence(for: result, cwd: projectPath, since: since)
+                        )
+                    },
+                    diffStat: diffStat
+                )
+
+                // 只把 confirmed=true 同步进参考清单（open → confirmed，带 diff 证据）。
+                // false 的**不**回写 —— 观察者视角下「这轮没做到」不等于
+                // 「自报做完但找不到」，把从未自报的条目打成存疑是冤枉。
+                let proven = analysis.results.filter(\.confirmed)
+                guard !proven.isEmpty else { return }
+                self.acceptance.applyAudit(
+                    proven.map { result in
+                        AcceptanceVerdict(
+                            id: result.id, confirmed: true, note: result.note,
+                            evidence: Self.evidence(for: result, cwd: projectPath, since: since)
+                        )
+                    },
+                    in: projectPath
+                )
+            }
+        }
+    }
+
+    /// diff 的一行摘要（"3 个文件 +120/-45"）。行数来自 git numstat，不经模型。
+    private nonisolated static func diffStatLine(cwd: String, since: String?) -> String? {
+        let changes = GitDiff.numstat(cwd, since: since)
+        guard !changes.isEmpty else { return nil }
+        let added = changes.reduce(0) { $0 + $1.added }
+        let removed = changes.reduce(0) { $0 + $1.removed }
+        return "\(changes.count) 个文件 +\(added)/-\(removed)"
     }
 
     /// 把复核认定的文件换算成带行数的证据。
@@ -434,7 +569,7 @@ public final class HookCoordinator {
     /// 拆解是异步的：它要花几秒到几十秒，绝不能挡在这里。等 Claude 干完活
     /// （通常几分钟），拆解早就完成了。
     @MainActor
-    private func handleUserPrompt(_ event: HookEvent) {
+    func handleUserPrompt(_ event: HookEvent) {
         acceptance.arm(sessionId: event.sessionId)
 
         guard let text = event.promptText?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -445,6 +580,19 @@ public final class HookCoordinator {
         acceptance.recordPrompt(
             RawPrompt(text: text, sessionId: event.sessionId), in: path
         )
+
+        // 开轮（或并入未收口的轮）。baseline 要 fork git，绝不能挡在这条 hook 里 ——
+        // 先开轮，HEAD 由后台拿到后补写。
+        let roundId = rounds.beginRound(
+            sessionId: event.sessionId, projectPath: path, prompt: text
+        )
+        Task.detached(priority: .utility) {
+            guard let head = GitDiff.head(path) else { return }
+            await MainActor.run {
+                self.rounds.setBaseline(roundId: roundId, in: path, commit: head)
+            }
+        }
+
         scheduleExtraction(projectPath: path, plan: nil)
     }
 
@@ -479,6 +627,12 @@ public final class HookCoordinator {
 
         extracting.insert(projectPath)
         let extractor = self.extractor
+        // 这批要点归到哪个会话/轮：取最后一句原话的会话。少了 sourceSessionId
+        // 的话，轮次分析按会话过滤 subjects 永远是空的（真踩过）。
+        let sessionId = prompts.last?.sessionId
+        let roundId = sessionId.flatMap {
+            rounds.openRoundId(sessionId: $0, projectPath: projectPath)
+        }
 
         Task.detached(priority: .utility) {
             // 在后台线程读 HEAD：它要 fork 一个 git 进程，别占着 MainActor。
@@ -508,10 +662,12 @@ public final class HookCoordinator {
                             text: $0.text,
                             acceptance: $0.acceptance,
                             origin: $0.inferred ? .inferred : (plan != nil ? .plan : .userPrompt),
+                            sourceSessionId: sessionId,
                             // 入库这一刻的 HEAD 就是这条要点的 diff 起点。
                             // 少了它，复核时无从回答"这条要点之后代码变了什么"，
                             // 只能拿整个仓库历史去比，噪音大到没法用。
-                            baselineCommit: baseline
+                            baselineCommit: baseline,
+                            roundId: roundId
                         )
                     },
                     into: projectPath
@@ -721,13 +877,15 @@ public final class HookCoordinator {
     }
 
     /// 把 Claude 的最终回复压成一行通知正文。
-    static func summarize(_ message: String?) -> String? {
+    /// 默认 90 字给通知横幅；轮次记录的 `assistantSummary` 用 200 ——
+    /// 时间轴节点展开后有地方摆，是分析失败/纯问答轮的兜底展示。
+    static func summarize(_ message: String?, limit: Int = 90) -> String? {
         guard let message else { return nil }
         let cleaned = message
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return nil }
-        if cleaned.count <= 90 { return cleaned }
-        return String(cleaned.prefix(88)) + "…"
+        if cleaned.count <= limit { return cleaned }
+        return String(cleaned.prefix(limit - 2)) + "…"
     }
 }
