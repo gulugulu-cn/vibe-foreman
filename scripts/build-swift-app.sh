@@ -38,9 +38,15 @@ fail() { printf '\033[31m✗\033[0m %s\n' "$1" >&2; exit 1; }
 
 # ---------- 环境检查 ----------
 
-command -v swift >/dev/null || fail "找不到 swift，请先安装 Xcode"
-xcodebuild -checkFirstLaunchStatus >/dev/null 2>&1 \
-  || fail "Xcode 首次启动检查未通过，请先运行：sudo xcodebuild -runFirstLaunch"
+command -v swift >/dev/null || fail "找不到 swift，请先安装 Xcode 或 Command Line Tools"
+# first-launch 检查只对完整 Xcode 有意义。纯 Command Line Tools 的机器上
+# xcodebuild 一定失败，会把本来能编的环境直接 fail 掉（issue #3 附带修复）。
+if xcode-select -p 2>/dev/null | grep -q "Xcode.app"; then
+  xcodebuild -checkFirstLaunchStatus >/dev/null 2>&1 \
+    || fail "Xcode 首次启动检查未通过，请先运行：sudo xcodebuild -runFirstLaunch"
+else
+  log "未检测到完整 Xcode（纯 Command Line Tools），跳过 first-launch 检查"
+fi
 
 SDK_VERSION=$(xcrun --show-sdk-version)
 MAJOR=${SDK_VERSION%%.*}
